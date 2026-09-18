@@ -43,16 +43,26 @@ export class ObservationEngine {
         const isElementVisible = (el) => {
           if (!el) return false;
           const rect = el.getBoundingClientRect();
-          if (rect.width <= 0 || rect.height <= 0) return false;
+          if (rect.width <= 2 || rect.height <= 2) return false;
 
           const style = window.getComputedStyle(el);
           if (
             style.display === 'none' ||
             style.visibility === 'hidden' ||
-            style.opacity === '0'
+            parseFloat(style.opacity || '1') < 0.05 ||
+            style.clip === 'rect(0px, 0px, 0px, 0px)' ||
+            style.clipPath === 'inset(50%)'
           ) {
             return false;
           }
+
+          // Filter out offscreen navigation/menu toggle checkboxes (e.g. Wikipedia Vector 2022 checkbox tricks)
+          if (el.tagName === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio')) {
+            if (rect.width <= 10 || rect.height <= 10 || rect.bottom < 0 || rect.right < 0) {
+              return false;
+            }
+          }
+
           return true;
         };
 
@@ -165,8 +175,13 @@ export class ObservationEngine {
           else if (role === 'textbox' || role === 'searchbox' || role === 'combobox') inputCount++;
           else otherCount++;
 
+          const elemId = 'elem_' + (observedInteractive.length + 1);
+          try {
+            el.setAttribute('data-hiveai-id', elemId);
+          } catch {}
+
           observedInteractive.push({
-            id: 'elem_' + (observedInteractive.length + 1),
+            id: elemId,
             role: role,
             name: name || ('(Unnamed ' + role + ')'),
             text: rawText && rawText !== name ? rawText : undefined,

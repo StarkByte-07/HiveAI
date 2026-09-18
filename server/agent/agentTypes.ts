@@ -1,4 +1,5 @@
 import type { PageObservation } from '../observation/observationTypes.ts';
+import type { AccessibilityAuditResult } from '../audit/accessibilityAuditor.ts';
 
 export type GoalIntentType = 
   | 'NAVIGATION' 
@@ -85,6 +86,7 @@ export interface AgentStepEvent {
     error?: string;
   };
   observation?: PageObservation;
+  accessibilityAudit?: AccessibilityAuditResult;
   isTerminal?: boolean;
 }
 
@@ -108,6 +110,7 @@ export interface AgentLoopResult {
   goal: string;
   intentType?: GoalIntentType;
   extractedResults?: ExtractedResultItem[];
+  accessibilityAudit?: AccessibilityAuditResult;
   totalSteps: number;
   journey: AgentStepEvent[];
   finalObservation?: PageObservation | null;

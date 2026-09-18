@@ -124,7 +124,7 @@ export const AuditReportPanel: React.FC<AuditReportPanelProps> = ({
           </div>
         </div>
 
-        {/* Results Count / Accessibility Findings */}
+        {/* Results Count */}
         <div className="p-2.5 rounded bg-zinc-950/50 border border-zinc-800/60">
           <div className="text-[10px] font-mono text-zinc-500 uppercase mb-1">
             Items Retrieved
@@ -133,6 +133,22 @@ export const AuditReportPanel: React.FC<AuditReportPanelProps> = ({
             {hasExtractedResults ? (
               <span className="text-amber-300 font-bold">
                 {report.extractedResults!.length} items
+              </span>
+            ) : (
+              '—'
+            )}
+          </div>
+        </div>
+
+        {/* Accessibility Violations */}
+        <div className="p-2.5 rounded bg-zinc-950/50 border border-zinc-800/60">
+          <div className="text-[10px] font-mono text-zinc-500 uppercase mb-1">
+            A11y Violations
+          </div>
+          <div className="font-mono text-zinc-300 font-medium">
+            {report.accessibilityFindings !== null && report.accessibilityFindings !== undefined ? (
+              <span className={report.accessibilityFindings > 0 ? 'text-rose-400 font-bold' : 'text-emerald-400 font-semibold'}>
+                {report.accessibilityFindings} {report.accessibilityFindings === 1 ? 'issue' : 'issues'}
               </span>
             ) : (
               '—'

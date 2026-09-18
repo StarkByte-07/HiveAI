@@ -159,9 +159,7 @@ export class AgentExecutor {
 
   private async executeScroll(page: Page, direction: 'up' | 'down'): Promise<AgentExecutionResult> {
     const scrollAmount = direction === 'up' ? -650 : 650;
-    await page.evaluate((amount) => {
-      window.scrollBy({ top: amount, left: 0, behavior: 'instant' });
-    }, scrollAmount);
+    await page.evaluate(`window.scrollBy({ top: ${scrollAmount}, left: 0, behavior: 'instant' });`);
 
     await page.waitForTimeout(100);
 
@@ -223,10 +221,50 @@ export class AgentExecutor {
     const cleanTarget = target.trim();
     const cleanLower = cleanTarget.toLowerCase();
 
-    // 1. Check if target directly matches an observed element
+    // 0. Direct HiveAI element ID targeting ([data-hiveai-id="elem_X"])
+    const idMatch = cleanTarget.match(/elem_\d+/i);
+    if (idMatch) {
+      const elemId = idMatch[0].toLowerCase();
+      const directLocator = page.locator(`[data-hiveai-id="${elemId}"]`).first();
+      if (await directLocator.count().catch(() => 0) > 0) {
+        const isVis = await directLocator.isVisible().catch(() => false);
+        if (isVis) {
+          if (isInputPreference) {
+            const isEdit = await directLocator.isEditable().catch(() => false);
+            const inputType = (await directLocator.getAttribute('type').catch(() => '')) || '';
+            if (isEdit && inputType !== 'checkbox' && inputType !== 'radio') {
+              return directLocator;
+            }
+          } else {
+            return directLocator;
+          }
+        }
+      }
+    }
+
+    // 1. Check if target matches an observed element
     const matchingElement = this.matchObservedElement(cleanTarget, observation);
 
     if (matchingElement) {
+      // Check if matching element has an assigned data-hiveai-id
+      if (matchingElement.id) {
+        const directLocator = page.locator(`[data-hiveai-id="${matchingElement.id}"]`).first();
+        if (await directLocator.count().catch(() => 0) > 0) {
+          const isVis = await directLocator.isVisible().catch(() => false);
+          if (isVis) {
+            if (isInputPreference) {
+              const isEdit = await directLocator.isEditable().catch(() => false);
+              const inputType = (await directLocator.getAttribute('type').catch(() => '')) || '';
+              if (isEdit && inputType !== 'checkbox' && inputType !== 'radio') {
+                return directLocator;
+              }
+            } else {
+              return directLocator;
+            }
+          }
+        }
+      }
+
       // If matching element has an accessible role and name, use Playwright getByRole
       if (matchingElement.role && matchingElement.name) {
         try {
@@ -263,20 +301,28 @@ export class AgentExecutor {
     if (isInputPreference) {
       try {
         const placeholderLoc = page.getByPlaceholder(cleanTarget, { exact: false }).first();
-        if (await placeholderLoc.count() > 0) return placeholderLoc;
+        if (await placeholderLoc.count() > 0 && await placeholderLoc.isVisible().catch(() => false)) return placeholderLoc;
 
         const labelLoc = page.getByLabel(cleanTarget, { exact: false }).first();
-        if (await labelLoc.count() > 0) return labelLoc;
+        if (await labelLoc.count() > 0 && await labelLoc.isVisible().catch(() => false)) return labelLoc;
 
         const roleSearch = page.getByRole('searchbox', { name: cleanTarget, exact: false }).first();
-        if (await roleSearch.count() > 0) return roleSearch;
+        if (await roleSearch.count() > 0 && await roleSearch.isVisible().catch(() => false)) return roleSearch;
 
         const roleTextbox = page.getByRole('textbox', { name: cleanTarget, exact: false }).first();
-        if (await roleTextbox.count() > 0) return roleTextbox;
+        if (await roleTextbox.count() > 0 && await roleTextbox.isVisible().catch(() => false)) return roleTextbox;
 
-        // Common search inputs fallback
-        const generalInput = page.locator('input[type="search"], input[type="text"], input:not([type="hidden"])').first();
-        if (await generalInput.count() > 0) return generalInput;
+        // Safe search & text input fallback: NEVER pick checkboxes or radio buttons
+        const safeInputs = page.locator(
+          'input[type="search"]:visible, input[type="text"]:visible, textarea:visible, input:not([type="checkbox"]):not([type="radio"]):not([type="hidden"]):not([type="button"]):not([type="submit"]):not([type="reset"]):visible'
+        );
+        const count = await safeInputs.count().catch(() => 0);
+        for (let i = 0; i < Math.min(count, 4); i++) {
+          const cand = safeInputs.nth(i);
+          if (await cand.isVisible().catch(() => false) && await cand.isEditable().catch(() => false)) {
+            return cand;
+          }
+        }
       } catch {
         // Continue
       }

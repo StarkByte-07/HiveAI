@@ -90,15 +90,25 @@ export class BrowserManager {
       this.isHeadlessFallback = false;
     }
 
+    const launchArgs = [
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+      '--disable-dev-shm-usage',
+      '--disable-blink-features=AutomationControlled',
+    ];
+
+    if (!shouldLaunchHeadless) {
+      // In headed mode, open Chromium maximized
+      launchArgs.push('--start-maximized');
+    } else {
+      // In headless mode (containers), set standard 1080p desktop window
+      launchArgs.push('--window-size=1920,1080');
+    }
+
     try {
       this.browser = await chromium.launch({
         headless: shouldLaunchHeadless,
-        args: [
-          '--no-sandbox',
-          '--disable-setuid-sandbox',
-          '--disable-dev-shm-usage',
-          '--disable-blink-features=AutomationControlled',
-        ],
+        args: launchArgs,
       });
     } catch (launchErr: any) {
       // If headed launch failed specifically due to display missing, try headless fallback
@@ -108,17 +118,33 @@ export class BrowserManager {
         this.isHeadlessFallback = true;
         this.browser = await chromium.launch({
           headless: true,
-          args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+          args: [
+            '--no-sandbox',
+            '--disable-setuid-sandbox',
+            '--disable-dev-shm-usage',
+            '--window-size=1920,1080',
+          ],
         });
       } else {
         throw new Error(`Failed to launch Chromium: ${launchErr?.message || 'Unknown error'}`);
       }
     }
 
-    this.context = await this.browser.newContext({
-      viewport: { width: 1280, height: 800 },
+    // Configure context:
+    // When headed, viewport: null lets the webpage viewport dynamically match the native
+    // maximized browser window without artificial fixed dimension borders or blank areas.
+    // When headless, provide a clean 1920x1080 desktop viewport.
+    const contextOptions: any = {
       userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 AutonomousUiAuditor/1.0',
-    });
+    };
+
+    if (!shouldLaunchHeadless) {
+      contextOptions.viewport = null;
+    } else {
+      contextOptions.viewport = { width: 1920, height: 1080 };
+    }
+
+    this.context = await this.browser.newContext(contextOptions);
 
     this.page = await this.context.newPage();
     perfTimer.end('browser_start');

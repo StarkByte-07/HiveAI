@@ -26,6 +26,7 @@ import {
   JourneyActionType,
   PageObservation,
   ObservationResponse,
+  AccessibilityAuditResult,
 } from './types/index.ts';
 
 export default function App() {
@@ -34,6 +35,7 @@ export default function App() {
   const [testingGoal, setTestingGoal] = useState<string>('');
   const [isLaunching, setIsLaunching] = useState<boolean>(false);
   const [isObserving, setIsObserving] = useState<boolean>(false);
+  const [isAuditing, setIsAuditing] = useState<boolean>(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -58,12 +60,13 @@ export default function App() {
   // Genuine journey trace (genuine events only)
   const [journeySteps, setJourneySteps] = useState<JourneyStep[]>([]);
 
-  // Phase 4 keeps empty findings (Phase 5 will do full audit analysis)
-  const [findings] = useState<FindingsSummary>({
+  // Phase 5 Accessibility findings and metrics
+  const [findings, setFindings] = useState<FindingsSummary>({
     accessibilityCount: 0,
     uxFrictionCount: 0,
     potentialIssuesCount: 0,
   });
+  const [accessibilityAudit, setAccessibilityAudit] = useState<AccessibilityAuditResult | null>(null);
 
   // Phase 4 Audit report with intent & extracted results support
   const [auditReport, setAuditReport] = useState<AuditReport>({
@@ -529,20 +532,30 @@ export default function App() {
         const rawStatus = String(loopRes.status || loopRes.reason || 'completed').toLowerCase();
         const isGoalMet = rawStatus === 'completed' || rawStatus === 'goal_met';
         const isStopped = rawStatus === 'stopped';
-        const finalState = isGoalMet ? 'GOAL COMPLETED' : isStopped ? 'STOPPED' : 'READY';
+        const finalState = isGoalMet ? 'GOAL COMPLETED' : isStopped ? 'STOPPED' : (rawStatus === 'max_steps_reached' ? 'AGENT FAILED' : 'READY');
 
         const finalIntent = loopRes.intentType || event.intentType || event.action?.intentType;
         const finalResults = loopRes.extractedResults || event.extractedResults || event.action?.extractedResults;
         const explanationText = event.explanation || event.action?.explanation || loopRes.message || event.description;
+        const audit: AccessibilityAuditResult | undefined = loopRes.accessibilityAudit || event.accessibilityAudit;
 
         if (loopRes.finalObservation) {
           setPageObservation(loopRes.finalObservation);
         }
 
+        if (audit) {
+          setAccessibilityAudit(audit);
+          setFindings({
+            accessibilityCount: audit.totalViolations || 0,
+            uxFrictionCount: 0,
+            potentialIssuesCount: audit.summary?.minor || 0,
+          });
+        }
+
         setAgentStatus((prev) => ({
           ...prev,
           state: finalState,
-          agentStatus: isGoalMet ? 'Completed' : isStopped ? 'Stopped' : 'Ready',
+          agentStatus: isGoalMet ? 'Completed' : isStopped ? 'Stopped' : (rawStatus === 'max_steps_reached' ? 'Max Steps Reached' : 'Failed'),
           isRunning: false,
           currentUrl: loopRes.finalObservation?.url || event.url || prev.currentUrl,
           intentType: finalIntent || prev.intentType,
@@ -560,13 +573,14 @@ export default function App() {
 
         setAuditReport((prev) => ({
           goal: testingGoal.trim() || prev.goal || 'General page exploration',
-          status: isGoalMet ? 'Completed' : isStopped ? 'Failed' : 'Completed',
+          status: isGoalMet ? 'Completed' : 'Failed',
           totalSteps: loopRes.totalSteps ?? event.stepNumber ?? prev.totalSteps ?? 0,
-          accessibilityFindings: 0,
+          accessibilityFindings: audit ? (audit.totalViolations ?? 0) : prev.accessibilityFindings,
           uxFrictionFindings: 0,
           generatedAt: new Date().toLocaleTimeString(),
           intentType: finalIntent || prev.intentType,
           extractedResults: finalResults || prev.extractedResults,
+          accessibilityAudit: audit || prev.accessibilityAudit,
           summary: explanationText || loopRes.message || event.description,
         }));
 
@@ -667,6 +681,47 @@ export default function App() {
     }
   };
 
+  /**
+   * On-demand manual accessibility audit handler
+   */
+  const handleRunAccessibilityAudit = async () => {
+    if (isAuditing) return;
+    setIsAuditing(true);
+    setErrorMessage(null);
+    setStatusMessage('Running autonomous black-box accessibility audit with axe-core & DOM checks...');
+
+    try {
+      const response = await fetch('/api/agent/audit/accessibility', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success || !data.audit) {
+        throw new Error(data.message || data.error || 'Failed to complete accessibility audit.');
+      }
+
+      const audit: AccessibilityAuditResult = data.audit;
+      setAccessibilityAudit(audit);
+      setFindings({
+        accessibilityCount: audit.totalViolations || 0,
+        uxFrictionCount: 0,
+        potentialIssuesCount: audit.summary?.minor || 0,
+      });
+      setAuditReport((prev) => ({
+        ...prev,
+        accessibilityFindings: audit.totalViolations || 0,
+        accessibilityAudit: audit,
+      }));
+      setStatusMessage(`Accessibility audit completed: ${audit.totalViolations} violations detected.`);
+    } catch (err: any) {
+      console.error('[Accessibility Audit Error]', err);
+      setErrorMessage(err?.message || 'Failed to execute accessibility audit.');
+    } finally {
+      setIsAuditing(false);
+    }
+  };
+
   const handleDismissMessages = () => {
     setErrorMessage(null);
     setStatusMessage(null);
@@ -733,7 +788,12 @@ export default function App() {
         {/* Middle Dual Panels: Live Journey & Findings */}
         <section className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <JourneyPanel steps={journeySteps} />
-          <FindingsPanel findings={findings} />
+          <FindingsPanel
+            findings={findings}
+            auditResult={accessibilityAudit}
+            onRunAudit={handleRunAccessibilityAudit}
+            isAuditing={isAuditing}
+          />
         </section>
 
         {/* Browser Evidence Panel (Connected to real Playwright screenshot) */}

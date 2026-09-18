@@ -3,6 +3,7 @@ import { browserManager } from '../browser/browserManager.ts';
 import { observationEngine } from '../observation/observationEngine.ts';
 import { agentLoop } from '../agent/agentLoop.ts';
 import { agentReasoner } from '../agent/agentReasoner.ts';
+import { accessibilityAuditor } from '../audit/accessibilityAuditor.ts';
 
 export const agentRouter = Router();
 
@@ -236,6 +237,40 @@ agentRouter.post('/observe', async (_req: Request, res: Response): Promise<void>
       success: false,
       message: err?.message || 'Failed to observe active browser page.',
       error: err?.message || 'Observation failed',
+    });
+  }
+});
+
+/**
+ * POST /api/agent/audit/accessibility
+ * Phase 5: Autonomous Black-Box Accessibility Audit
+ * Audits the active Playwright page with axe-core and custom heuristics.
+ */
+agentRouter.post('/audit/accessibility', async (_req: Request, res: Response): Promise<void> => {
+  const page = browserManager.getPage();
+  if (!page || page.isClosed()) {
+    res.status(400).json({
+      success: false,
+      message: 'No active browser session found. Please run the agent to open a target page first.',
+      error: 'Browser not started or page closed.',
+    });
+    return;
+  }
+
+  try {
+    const observation = await observationEngine.observePage(page);
+    const auditResult = await accessibilityAuditor.auditPage(page, observation);
+    res.status(200).json({
+      success: true,
+      audit: auditResult,
+      message: `Audit completed: ${auditResult.totalViolations} violations detected across WCAG and black-box DOM rules.`,
+    });
+  } catch (err: any) {
+    console.error('[Accessibility Audit Error]', err);
+    res.status(500).json({
+      success: false,
+      message: err?.message || 'Accessibility audit failed.',
+      error: err?.message,
     });
   }
 });

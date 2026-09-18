@@ -162,6 +162,33 @@ export interface Finding {
   impact?: string;
 }
 
+export interface AccessibilityFinding {
+  id: string;
+  rule: string;
+  category: string;
+  severity: FindingSeverity;
+  element: string;
+  message: string;
+  evidence: string;
+  recommendation: string;
+  source: 'axe-core' | 'dom-heuristic' | 'accessibility-tree';
+  wcagLevel?: string;
+  htmlSnippet?: string;
+}
+
+export interface AccessibilityAuditResult {
+  url: string;
+  timestamp: string;
+  totalViolations: number;
+  findings: AccessibilityFinding[];
+  summary: {
+    critical: number;
+    serious: number;
+    moderate: number;
+    minor: number;
+  };
+}
+
 export interface FindingsSummary {
   accessibilityCount: number;
   uxFrictionCount: number;
@@ -185,5 +212,6 @@ export interface AuditReport {
   generatedAt?: string | null;
   intentType?: GoalIntentType | null;
   extractedResults?: ExtractedResultItem[] | null;
+  accessibilityAudit?: AccessibilityAuditResult | null;
   summary?: string | null;
 }
