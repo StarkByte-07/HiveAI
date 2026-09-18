@@ -105,7 +105,15 @@ export const AuditReportPanel: React.FC<AuditReportPanelProps> = ({
           </div>
           <div className="font-mono text-zinc-300 font-medium">
             {report.status ? (
-              <span className={report.status === 'Completed' ? 'text-emerald-400 font-semibold' : 'text-zinc-300'}>
+              <span
+                className={
+                  report.status === 'Completed'
+                    ? 'text-emerald-400 font-semibold'
+                    : report.status === 'Blocked'
+                      ? 'text-amber-400 font-semibold'
+                      : 'text-rose-400 font-semibold'
+                }
+              >
                 {report.status}
               </span>
             ) : (
@@ -130,12 +138,12 @@ export const AuditReportPanel: React.FC<AuditReportPanelProps> = ({
             Items Retrieved
           </div>
           <div className="font-mono text-zinc-300 font-medium">
-            {hasExtractedResults ? (
+            {report.status === 'Completed' && hasExtractedResults ? (
               <span className="text-amber-300 font-bold">
                 {report.extractedResults!.length} items
               </span>
             ) : (
-              '—'
+              <span className="text-zinc-500 font-mono">0 items</span>
             )}
           </div>
         </div>
@@ -157,16 +165,16 @@ export const AuditReportPanel: React.FC<AuditReportPanelProps> = ({
         </div>
       </div>
 
-      {/* Extracted Results Cards for Information Retrieval Goals */}
-      {hasExtractedResults && (
+      {/* Extracted Results Cards for Information Retrieval Goals (Valid only when Completed) */}
+      {hasExtractedResults && report.status === 'Completed' && (
         <div className="p-3 rounded-md bg-zinc-950/70 border border-zinc-800 space-y-2.5">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-xs font-mono font-semibold text-zinc-200">
               <CheckCircle2 className="h-3.5 w-3.5 text-emerald-400" />
-              <span>COLLECTED RESULTS ({report.extractedResults!.length} ITEMS)</span>
+              <span>VALIDATED RESULTS ({report.extractedResults!.length} ITEMS)</span>
             </div>
             <span className="text-[10px] font-mono text-amber-400/90 bg-amber-950/50 px-2 py-0.5 rounded border border-amber-900/60">
-              Multi-result information retrieval
+              Constraints Verified
             </span>
           </div>
 
@@ -200,6 +208,28 @@ export const AuditReportPanel: React.FC<AuditReportPanelProps> = ({
                     <span className="truncate">{item.source}</span>
                   </div>
                 )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Rejected Candidate Items (Constraint Violations) */}
+      {report.rejectedResults && report.rejectedResults.length > 0 && report.status !== 'Completed' && (
+        <div className="p-3 rounded-md bg-rose-950/20 border border-rose-900/40 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-xs font-mono font-semibold text-rose-400">
+              <span>REJECTED CANDIDATES ({report.rejectedResults.length} ITEMS)</span>
+            </div>
+            <span className="text-[10px] font-mono text-rose-400/90 bg-rose-950/60 px-2 py-0.5 rounded border border-rose-800/60">
+              Violated Required Constraints
+            </span>
+          </div>
+          <div className="space-y-1.5 text-xs">
+            {report.rejectedResults.map((rej, idx) => (
+              <div key={idx} className="p-2 rounded bg-zinc-950/60 border border-zinc-800 flex flex-col gap-0.5">
+                <span className="font-semibold text-zinc-300 font-mono text-[11px]">{rej.item.name}</span>
+                <span className="text-rose-400 font-mono text-[10px]">{rej.reason}</span>
               </div>
             ))}
           </div>

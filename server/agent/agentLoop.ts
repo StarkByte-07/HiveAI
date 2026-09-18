@@ -3,6 +3,7 @@ import { observationEngine } from '../observation/observationEngine.ts';
 import type { PageObservation } from '../observation/observationTypes.ts';
 import { agentReasoner } from './agentReasoner.ts';
 import { agentExecutor } from './agentExecutor.ts';
+import { goalValidator } from './goalValidator.ts';
 import { accessibilityAuditor, type AccessibilityAuditResult } from '../audit/accessibilityAuditor.ts';
 import { perfTimer } from '../utils/timing.ts';
 import type {
@@ -34,7 +35,8 @@ export class AgentLoop {
   }
 
   /**
-   * Runs the complete autonomous Observe -> Reason -> Act -> Re-Observe loop.
+   * Runs the complete autonomous lifecycle:
+   * OBSERVE -> REASON -> ACTION -> EXECUTE ACTION -> OBSERVE RESULT -> VALIDATE GOAL
    */
   async run(
     targetUrl: string,
@@ -113,7 +115,7 @@ export class AgentLoop {
       };
       emitEvent(initialObsEvent);
 
-      // STEP 7: Check early if page is blocked by anti-bot/CAPTCHA/403
+      // Check early if page is blocked by anti-bot/CAPTCHA/403
       if (latestObservation.isBlocked || navResult.statusCode === 403 || navResult.statusCode === 401) {
         const blockedMsg = latestObservation.blockedReason || `Target page returned HTTP ${navResult.statusCode} Access Denied / Anti-bot verification.`;
         emitEvent({
@@ -125,11 +127,59 @@ export class AgentLoop {
           timestamp: new Date().toLocaleTimeString(),
           isTerminal: true,
         });
-        return this.finishResult(goal, journey, latestObservation, 'FAILED', blockedMsg, blockedMsg, detectedIntent, cumulativeResults);
+        return this.finishResult(goal, journey, latestObservation, 'BLOCKED', blockedMsg, blockedMsg, detectedIntent, cumulativeResults);
+      }
+
+      // Check if target page observation alone validates a simple navigation goal (TEST 4)
+      const initialValidation = goalValidator.validateGoal(
+        goal,
+        detectedIntent,
+        cumulativeResults,
+        latestObservation,
+        history
+      );
+
+      if (initialValidation.isSatisfied) {
+        let finalAudit: AccessibilityAuditResult | undefined;
+        try {
+          if (page && !page.isClosed()) {
+            finalAudit = await accessibilityAuditor.auditPage(page, latestObservation);
+          }
+        } catch (auditErr: any) {
+          console.warn('[AgentLoop] Accessibility audit warning:', auditErr?.message);
+        }
+
+        const finishEvent: AgentStepEvent = {
+          stepNumber: currentStepNumber++,
+          type: 'FINISH',
+          status: 'success',
+          actionType: 'finish',
+          intentType: detectedIntent,
+          accessibilityAudit: finalAudit,
+          description: `Goal validated and completed: ${initialValidation.reason}`,
+          explanation: initialValidation.reason,
+          url: page.url(),
+          timestamp: new Date().toLocaleTimeString(),
+          isTerminal: true,
+        };
+        emitEvent(finishEvent);
+
+        return this.finishResult(
+          goal,
+          journey,
+          latestObservation,
+          'COMPLETED',
+          finishEvent.description,
+          undefined,
+          detectedIntent,
+          cumulativeResults,
+          finalAudit
+        );
       }
 
       // ==========================================
       // AGENTIC AUTONOMOUS LOOP
+      // OBSERVE -> REASON -> ACTION -> EXECUTE -> OBSERVE -> VALIDATE
       // ==========================================
       while (currentStepNumber <= maxSteps && !this.abortRequested) {
         perfTimer.start('step_total');
@@ -138,12 +188,11 @@ export class AgentLoop {
         const reasonStepNumber = currentStepNumber++;
         const reasonTimestamp = new Date().toLocaleTimeString();
 
-        // Emit starting reasoning event
         emitEvent({
           stepNumber: reasonStepNumber,
           type: 'REASON',
           status: 'running',
-          description: 'Gemini is evaluating goal and current page observation...',
+          description: 'Gemini is evaluating goal constraints and current page observation...',
           timestamp: reasonTimestamp,
         });
 
@@ -179,6 +228,7 @@ export class AgentLoop {
           detectedIntent = nextAction.intentType;
         }
 
+        // Accumulate extracted candidates
         if (nextAction.extractedResults && nextAction.extractedResults.length > 0) {
           for (const item of nextAction.extractedResults) {
             const key = item.name.toLowerCase().trim();
@@ -188,7 +238,6 @@ export class AgentLoop {
           }
         }
 
-        // Emit completed reasoning event with chosen action details
         const actionDisplay = nextAction.action.toUpperCase();
         const targetDisplay = nextAction.target ? ` "${nextAction.target}"` : '';
         const valueDisplay = nextAction.value ? ` with value "${nextAction.value}"` : '';
@@ -213,61 +262,138 @@ export class AgentLoop {
           return this.finishResult(goal, journey, latestObservation, 'STOPPED', 'Agent stopped by user.', undefined, detectedIntent, cumulativeResults);
         }
 
-        // --- Check for FINISH action ---
+        // --- Check for FINISH action requested by Gemini ---
         if (nextAction.action === 'finish') {
           perfTimer.end('step_total');
           const candidateResults = nextAction.extractedResults && nextAction.extractedResults.length > 0
             ? nextAction.extractedResults
             : cumulativeResults;
 
-          const validation = this.validateGoalFulfillment(
+          // Rigorous Goal Validation check against constraints and browser evidence
+          const validation = goalValidator.validateGoal(
             goal,
             detectedIntent,
             candidateResults,
             latestObservation,
+            history,
             nextAction.explanation
           );
 
-          // Run final black-box accessibility audit on active target page
-          let finalAudit: AccessibilityAuditResult | undefined;
-          try {
-            if (page && !page.isClosed()) {
-              finalAudit = await accessibilityAuditor.auditPage(page, latestObservation);
+          if (validation.isSatisfied) {
+            // Positively validated completion!
+            let finalAudit: AccessibilityAuditResult | undefined;
+            try {
+              if (page && !page.isClosed()) {
+                finalAudit = await accessibilityAuditor.auditPage(page, latestObservation);
+              }
+            } catch (auditErr: any) {
+              console.warn('[AgentLoop] Final accessibility audit warning:', auditErr?.message);
             }
-          } catch (auditErr: any) {
-            console.warn('[AgentLoop] Final accessibility audit warning:', auditErr?.message);
+
+            const finishEvent: AgentStepEvent = {
+              stepNumber: currentStepNumber++,
+              type: 'FINISH',
+              status: 'success',
+              action: nextAction,
+              actionType: 'finish',
+              intentType: detectedIntent,
+              extractedResults: validation.validatedResults,
+              accessibilityAudit: finalAudit,
+              description: `Goal completed: ${validation.reason}`,
+              explanation: validation.reason,
+              url: page.url(),
+              timestamp: new Date().toLocaleTimeString(),
+              isTerminal: true,
+            };
+            emitEvent(finishEvent);
+
+            return this.finishResult(
+              goal,
+              journey,
+              latestObservation,
+              'COMPLETED',
+              finishEvent.description,
+              undefined,
+              detectedIntent,
+              validation.validatedResults,
+              finalAudit,
+              validation.rejectedResults,
+              validation.unmetConstraints
+            );
+          } else {
+            // Goal NOT satisfied!
+            // If steps remain, REJECT the premature finish and continue exploring.
+            if (currentStepNumber < maxSteps) {
+              const rejectStepNumber = currentStepNumber++;
+              const rejectionMsg = `Goal validation rejected premature finish: ${validation.reason}`;
+              emitEvent({
+                stepNumber: rejectStepNumber,
+                type: 'VALIDATE',
+                status: 'failed',
+                description: rejectionMsg,
+                explanation: validation.reason,
+                rejectedResults: validation.rejectedResults,
+                unmetConstraints: validation.unmetConstraints,
+                url: page.url(),
+                timestamp: new Date().toLocaleTimeString(),
+              });
+
+              history.push({
+                stepNumber: rejectStepNumber,
+                action: nextAction,
+                result: 'failed',
+                message: `Premature FINISH rejected: ${validation.reason}. You must continue taking actions (clicking relevant links, navigating, or verifying items) to satisfy the goal.`,
+                urlAfterAction: page.url(),
+              });
+
+              // Continue the loop to take the next useful action
+              continue;
+            } else {
+              // Max steps exhausted without goal satisfaction -> terminate as FAILED
+              let finalAudit: AccessibilityAuditResult | undefined;
+              try {
+                if (page && !page.isClosed()) {
+                  finalAudit = await accessibilityAuditor.auditPage(page, latestObservation);
+                }
+              } catch (auditErr: any) {
+                console.warn('[AgentLoop] Final accessibility audit warning:', auditErr?.message);
+              }
+
+              const failDescription = `Goal could not be fulfilled: ${validation.reason}`;
+              const failEvent: AgentStepEvent = {
+                stepNumber: currentStepNumber++,
+                type: 'FINISH',
+                status: 'failed',
+                action: nextAction,
+                actionType: 'finish',
+                intentType: detectedIntent,
+                extractedResults: undefined,
+                rejectedResults: validation.rejectedResults,
+                unmetConstraints: validation.unmetConstraints,
+                accessibilityAudit: finalAudit,
+                description: failDescription,
+                explanation: failDescription,
+                url: page.url(),
+                timestamp: new Date().toLocaleTimeString(),
+                isTerminal: true,
+              };
+              emitEvent(failEvent);
+
+              return this.finishResult(
+                goal,
+                journey,
+                latestObservation,
+                'FAILED',
+                failDescription,
+                failDescription,
+                detectedIntent,
+                undefined,
+                finalAudit,
+                validation.rejectedResults,
+                validation.unmetConstraints
+              );
+            }
           }
-
-          const finishEvent: AgentStepEvent = {
-            stepNumber: currentStepNumber++,
-            type: 'FINISH',
-            status: validation.status === 'COMPLETED' ? 'success' : 'failed',
-            action: nextAction,
-            actionType: 'finish',
-            intentType: detectedIntent,
-            extractedResults: validation.filteredResults || candidateResults,
-            accessibilityAudit: finalAudit,
-            description: validation.status === 'COMPLETED'
-              ? `Goal completed: ${validation.reason}`
-              : `Goal unfulfilled: ${validation.reason}`,
-            explanation: validation.reason,
-            url: page.url(),
-            timestamp: new Date().toLocaleTimeString(),
-            isTerminal: true,
-          };
-          emitEvent(finishEvent);
-
-          return this.finishResult(
-            goal,
-            journey,
-            latestObservation,
-            validation.status,
-            finishEvent.description,
-            validation.status === 'FAILED' ? validation.reason : undefined,
-            detectedIntent,
-            validation.filteredResults || candidateResults,
-            finalAudit
-          );
         }
 
         // --- 2. EXECUTION PHASE ---
@@ -289,7 +415,7 @@ export class AgentLoop {
         const urlBefore = page.url();
         const execResult = await agentExecutor.executeAction(page, nextAction, latestObservation);
 
-        // Record into history
+        // Record action outcome into history
         history.push({
           stepNumber: actionStepNumber,
           action: nextAction,
@@ -355,9 +481,9 @@ export class AgentLoop {
             history[history.length - 1].message += ` [${stateValidationMessage}]`;
           }
 
-          // If the page is blocked by CAPTCHA / bot challenge, stop cleanly immediately
+          // If the page is blocked by anti-bot challenge, terminate immediately as BLOCKED
           if (latestObservation.isBlocked) {
-            const blockedMsg = latestObservation.blockedReason || 'Target page encountered an anti-bot or CAPTCHA block after action.';
+            const blockedMsg = latestObservation.blockedReason || 'Target page encountered an anti-bot or CAPTCHA block.';
             emitEvent({
               stepNumber: currentStepNumber++,
               type: 'ERROR',
@@ -368,16 +494,102 @@ export class AgentLoop {
               isTerminal: true,
             });
             perfTimer.end('step_total');
-            return this.finishResult(goal, journey, latestObservation, 'FAILED', blockedMsg, blockedMsg, detectedIntent, cumulativeResults);
+            return this.finishResult(goal, journey, latestObservation, 'BLOCKED', blockedMsg, blockedMsg, detectedIntent, cumulativeResults);
           }
         } catch (obsErr: any) {
           console.warn('[AgentLoop] Re-observation warning:', obsErr?.message);
         }
 
+        // --- 4. VALIDATE GOAL PHASE (OBSERVE RESULT -> VALIDATE GOAL) ---
+        const validateStepNumber = currentStepNumber++;
+        emitEvent({
+          stepNumber: validateStepNumber,
+          type: 'VALIDATE',
+          status: 'running',
+          description: 'Validating observed page state and evidence against goal requirements...',
+          url: page.url(),
+          timestamp: new Date().toLocaleTimeString(),
+        });
+
+        const postActionValidation = goalValidator.validateGoal(
+          goal,
+          detectedIntent,
+          cumulativeResults,
+          latestObservation,
+          history
+        );
+
+        if (postActionValidation.isSatisfied) {
+          // Goal positively validated from actual browser state!
+          let finalAudit: AccessibilityAuditResult | undefined;
+          try {
+            if (page && !page.isClosed()) {
+              finalAudit = await accessibilityAuditor.auditPage(page, latestObservation);
+            }
+          } catch (auditErr: any) {
+            console.warn('[AgentLoop] Final accessibility audit warning:', auditErr?.message);
+          }
+
+          emitEvent({
+            stepNumber: validateStepNumber,
+            type: 'VALIDATE',
+            status: 'success',
+            description: `Goal validation passed: ${postActionValidation.reason}`,
+            explanation: postActionValidation.reason,
+            extractedResults: postActionValidation.validatedResults,
+            url: page.url(),
+            timestamp: new Date().toLocaleTimeString(),
+          });
+
+          const finishEvent: AgentStepEvent = {
+            stepNumber: currentStepNumber++,
+            type: 'FINISH',
+            status: 'success',
+            actionType: 'finish',
+            intentType: detectedIntent,
+            extractedResults: postActionValidation.validatedResults,
+            accessibilityAudit: finalAudit,
+            description: `Goal completed: ${postActionValidation.reason}`,
+            explanation: postActionValidation.reason,
+            url: page.url(),
+            timestamp: new Date().toLocaleTimeString(),
+            isTerminal: true,
+          };
+          emitEvent(finishEvent);
+          perfTimer.end('step_total');
+
+          return this.finishResult(
+            goal,
+            journey,
+            latestObservation,
+            'COMPLETED',
+            finishEvent.description,
+            undefined,
+            detectedIntent,
+            postActionValidation.validatedResults,
+            finalAudit,
+            postActionValidation.rejectedResults,
+            postActionValidation.unmetConstraints
+          );
+        } else {
+          // Validation recorded; continue execution
+          emitEvent({
+            stepNumber: validateStepNumber,
+            type: 'VALIDATE',
+            status: 'running',
+            description: `Goal validation check: ${postActionValidation.reason}`,
+            explanation: postActionValidation.reason,
+            rejectedResults: postActionValidation.rejectedResults,
+            unmetConstraints: postActionValidation.unmetConstraints,
+            url: page.url(),
+            timestamp: new Date().toLocaleTimeString(),
+          });
+        }
+
         perfTimer.end('step_total');
       }
 
-      // If loop exited due to step limit
+      // If loop exited due to step limit reached without positive goal validation
       if (currentStepNumber > maxSteps) {
         let finalAudit: AccessibilityAuditResult | undefined;
         try {
@@ -389,13 +601,13 @@ export class AgentLoop {
           console.warn('[AgentLoop] Final accessibility audit warning:', auditErr?.message);
         }
 
-        const limitDescription = `Maximum step limit reached (${maxSteps} steps). The testing goal could not be fully verified within the step limit.`;
+        const limitDescription = `Maximum execution steps reached (${maxSteps} steps) before the requested goal could be verified.`;
         const limitEvent: AgentStepEvent = {
           stepNumber: currentStepNumber++,
           type: 'FINISH',
           status: 'failed',
           intentType: detectedIntent,
-          extractedResults: cumulativeResults.length > 0 ? [...cumulativeResults] : undefined,
+          extractedResults: undefined,
           accessibilityAudit: finalAudit,
           description: limitDescription,
           explanation: limitDescription,
@@ -407,16 +619,16 @@ export class AgentLoop {
           goal,
           journey,
           latestObservation,
-          'MAX_STEPS_REACHED',
+          'FAILED',
           limitDescription,
           limitDescription,
           detectedIntent,
-          cumulativeResults,
+          undefined,
           finalAudit
         );
       }
 
-      return this.finishResult(goal, journey, latestObservation, 'COMPLETED', 'Agent loop finished.', undefined, detectedIntent, cumulativeResults);
+      return this.finishResult(goal, journey, latestObservation, 'FAILED', 'Agent loop stopped without goal verification.', undefined, detectedIntent);
     } catch (fatalErr: any) {
       console.error('[AgentLoop] Fatal error:', fatalErr);
       const errorMsg = fatalErr?.message || 'Unknown agent execution error';
@@ -436,111 +648,29 @@ export class AgentLoop {
     }
   }
 
-  /**
-   * Validates if the observed browser state genuinely fulfills the goal.
-   * Prevents premature or hallucinated "completion" claims.
-   */
-  private validateGoalFulfillment(
-    goal: string,
-    intent: GoalIntentType,
-    cumulativeResults: ExtractedResultItem[],
-    observation: PageObservation | null,
-    explanation?: string
-  ): { isValid: boolean; status: 'COMPLETED' | 'FAILED'; reason: string; filteredResults?: ExtractedResultItem[] } {
-    const explLower = (explanation || '').toLowerCase();
-
-    // 1. Blocked page check
-    if (observation?.isBlocked) {
-      return {
-        isValid: false,
-        status: 'FAILED',
-        reason: `Target page is blocked: ${observation.blockedReason || 'Anti-bot or CAPTCHA verification detected.'}`,
-      };
-    }
-
-    // 2. Failure phrases check in Gemini's explanation
-    const failurePhrases = [
-      'does not display the requested',
-      'unable to find',
-      'could not find',
-      'cannot find',
-      'no results found',
-      'not available on this page',
-      'failed to locate',
-      'failed to retrieve',
-    ];
-    if (failurePhrases.some((p) => explLower.includes(p))) {
-      return {
-        isValid: false,
-        status: 'FAILED',
-        reason: explanation || 'Unable to satisfy the goal: the requested content was not found on the page.',
-      };
-    }
-
-    // 3. INFORMATION_RETRIEVAL validation
-    if (intent === 'INFORMATION_RETRIEVAL') {
-      if (!cumulativeResults || cumulativeResults.length === 0) {
-        return {
-          isValid: false,
-          status: 'FAILED',
-          reason: 'Information retrieval goal unfulfilled: No structured items or ratings were extracted from the application.',
-        };
-      }
-
-      // Filter valid items with actual names
-      const validItems = cumulativeResults.filter((item) => item.name && item.name.trim().length > 0);
-      if (validItems.length === 0) {
-        return {
-          isValid: false,
-          status: 'FAILED',
-          reason: 'Information retrieval goal unfulfilled: Extracted items were missing valid names or details.',
-        };
-      }
-
-      // Deduplicate results
-      const deduplicated: ExtractedResultItem[] = [];
-      const seen = new Set<string>();
-      for (const item of validItems) {
-        const key = item.name.toLowerCase().trim();
-        if (!seen.has(key)) {
-          seen.add(key);
-          deduplicated.push(item);
-        }
-      }
-
-      return {
-        isValid: true,
-        status: 'COMPLETED',
-        reason: explanation || `Successfully retrieved ${deduplicated.length} items satisfying the testing goal.`,
-        filteredResults: deduplicated,
-      };
-    }
-
-    // 4. Default completion for other verified intents
-    return {
-      isValid: true,
-      status: 'COMPLETED',
-      reason: explanation || 'Testing goal successfully fulfilled.',
-    };
-  }
-
   private finishResult(
     goal: string,
     journey: AgentStepEvent[],
     finalObservation: PageObservation | null,
-    status: 'COMPLETED' | 'MAX_STEPS_REACHED' | 'FAILED' | 'STOPPED',
+    status: 'COMPLETED' | 'FAILED' | 'BLOCKED' | 'STOPPED' | 'MAX_STEPS_REACHED',
     message: string,
     error?: string,
     intentType?: GoalIntentType,
     extractedResults?: ExtractedResultItem[],
-    accessibilityAudit?: AccessibilityAuditResult
+    accessibilityAudit?: AccessibilityAuditResult,
+    rejectedResults?: Array<{ item: ExtractedResultItem; reason: string }>,
+    unmetConstraints?: string[]
   ): AgentLoopResult {
+    const isCompleted = status === 'COMPLETED';
     return {
-      success: status === 'COMPLETED',
-      status,
+      success: isCompleted,
+      status: status === 'MAX_STEPS_REACHED' ? 'FAILED' : status,
+      goalSatisfied: isCompleted,
       goal,
       intentType,
-      extractedResults,
+      extractedResults: isCompleted ? extractedResults : undefined,
+      rejectedResults,
+      unmetConstraints,
       accessibilityAudit,
       totalSteps: journey.length,
       journey,

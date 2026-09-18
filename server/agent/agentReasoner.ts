@@ -97,19 +97,23 @@ CURRENT AGENT STATE:
 GOAL INTENT CLASSIFICATION:
 Classify the user's goal into one of these 5 INTENT TYPES:
 1. "NAVIGATION": The user explicitly requested to reach/open a specific page or section (e.g. "open the Telugu movies page", "go to checkout", "visit settings").
-   - FINISH CRITERIA: Reaching the intended page satisfies the goal. You can FINISH once you arrive.
-2. "SEARCH": The user asked to search for a query (e.g. "search for Telugu movies").
-   - FINISH CRITERIA: Performing the search and viewing the results satisfies the goal.
-3. "INFORMATION_RETRIEVAL": The user requested specific data, items, ratings, prices, lists, reviews, or answers (e.g. "give recent telugu movie ratings", "list top 5 laptops", "find prices of...", "show me ratings of...", "what are...", "compare X and Y").
-   - NOTE: Words/phrases like "give me", "list", "show me", "find", "compare", "provide", "ratings", "reviews", "prices" indicate INFORMATION RETRIEVAL.
+   - FINISH CRITERIA: Reaching and verifying the intended page satisfies the goal.
+2. "SEARCH": The user asked to search for a query without asking for extracted answers.
+   - FINISH CRITERIA: Performing the search and viewing results.
+3. "INFORMATION_RETRIEVAL": The user requested specific data, items, ratings, prices, lists, reviews, or answers (e.g. "give recent telugu movie ratings", "list top 5 laptops", "find prices of...", "hyd food", "what are...", "compare X and Y").
+   - NOTE: Words/phrases like "give me", "list", "show me", "find", "compare", "provide", "ratings", "reviews", "prices", "food", "movies" indicate INFORMATION RETRIEVAL.
    - CRITICAL RULES FOR INFORMATION_RETRIEVAL:
-     * Reaching a relevant page is NOT sufficient to finish!
-     * Finding only 1 item/rating is NOT sufficient if multiple items are available!
-     * Target: Collect at least 5 relevant results when 5 or more are available on the application. If fewer than 5 are available in total, collect all clearly relevant available results.
-     * If fewer than 5 relevant results are currently visible in the observation and more may exist further down, you MUST choose action "SCROLL" with direction "down" to inspect additional results.
-     * Only issue "FINISH" when you have collected enough relevant items (>= 5) OR when you have scrolled and verified no more results exist.
-     * When returning "FINISH", you MUST populate the "extractedResults" array with all collected items and provide a formatted summary in "reason".
-     * DO NOT FABRICATE OR GUESS ANY INFORMATION OR RATINGS. Only report items and ratings actually observed on the page.
+     * A SEARCH-RESULTS PAGE IS AN INTERMEDIATE STATE: Merely seeing search snippets (e.g. "Results 1–20 of 78") does NOT satisfy an information retrieval goal! You MUST click on the most relevant result or article link to read and retrieve actual content.
+     * STRICT CONSTRAINT SATISFACTION: If the user specified constraints (e.g. brand, max price, RAM, CPU/processor):
+       - Candidates must satisfy ALL constraints.
+       - NEVER substitute different processors (e.g. Intel Core 7 must NOT be substituted with Ultra 5, Core 5, or AMD Ryzen).
+       - NEVER exceed price limits (e.g. under 80,000 means <= 80,000).
+       - NEVER claim an item matches if it violates any constraint.
+     * Reaching a relevant page is NOT sufficient to finish without extracting the requested items!
+     * Target: Collect at least 3-5 relevant results when multiple are available.
+     * Only issue "FINISH" when you have collected valid items that satisfy all constraints OR when you have verified that no matching items exist.
+     * When returning "FINISH", populate the "extractedResults" array with all collected items and provide a formatted summary in "reason".
+     * DO NOT FABRICATE OR GUESS ANY INFORMATION. Only report items and ratings actually observed on the page.
 4. "ACTION": The user requested a specific action (e.g. "click the Learn more link", "fill contact form").
    - FINISH CRITERIA: Perform the action, observe the result, then FINISH.
 5. "VERIFICATION": The user requested to verify or check a condition on the page.

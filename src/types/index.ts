@@ -32,6 +32,7 @@ export type AgentRuntimeState =
   | 'ACTION FAILED'
   | 'GOAL COMPLETED'
   | 'AGENT FAILED'
+  | 'BLOCKED'
   | 'STOPPED'
   | 'ERROR';
 
@@ -205,13 +206,16 @@ export interface BrowserEvidenceItem {
 
 export interface AuditReport {
   goal: string | null;
-  status: 'Not started' | 'In progress' | 'Completed' | 'Failed' | null;
+  status: 'Not started' | 'In progress' | 'Completed' | 'Failed' | 'Blocked' | null;
+  goalSatisfied?: boolean;
   totalSteps: number | null;
   accessibilityFindings: number | null;
   uxFrictionFindings: number | null;
   generatedAt?: string | null;
   intentType?: GoalIntentType | null;
   extractedResults?: ExtractedResultItem[] | null;
+  rejectedResults?: Array<{ item: ExtractedResultItem; reason: string }>;
+  unmetConstraints?: string[];
   accessibilityAudit?: AccessibilityAuditResult | null;
   summary?: string | null;
 }

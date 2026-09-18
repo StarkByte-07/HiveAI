@@ -64,6 +64,7 @@ export type AgentStepEventType =
   | 'OBSERVE' 
   | 'REASON' 
   | 'ACTION' 
+  | 'VALIDATE'
   | 'FINISH' 
   | 'ERROR';
 
@@ -80,6 +81,8 @@ export interface AgentStepEvent {
   timestamp: string;
   intentType?: GoalIntentType;
   extractedResults?: ExtractedResultItem[];
+  rejectedResults?: Array<{ item: ExtractedResultItem; reason: string }>;
+  unmetConstraints?: string[];
   result?: {
     success: boolean;
     message: string;
@@ -106,10 +109,13 @@ export interface AgentLoopConfig {
 
 export interface AgentLoopResult {
   success: boolean;
-  status: 'COMPLETED' | 'MAX_STEPS_REACHED' | 'FAILED' | 'STOPPED';
+  status: 'COMPLETED' | 'FAILED' | 'BLOCKED' | 'STOPPED' | 'MAX_STEPS_REACHED';
+  goalSatisfied: boolean;
   goal: string;
   intentType?: GoalIntentType;
   extractedResults?: ExtractedResultItem[];
+  rejectedResults?: Array<{ item: ExtractedResultItem; reason: string }>;
+  unmetConstraints?: string[];
   accessibilityAudit?: AccessibilityAuditResult;
   totalSteps: number;
   journey: AgentStepEvent[];

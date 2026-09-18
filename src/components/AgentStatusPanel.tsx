@@ -32,6 +32,8 @@ export const AgentStatusPanel: React.FC<AgentStatusPanelProps> = ({ status, onSt
         return 'bg-rose-950/70 text-rose-300 border-rose-700/80';
       case 'GOAL COMPLETED':
         return 'bg-emerald-900/80 text-emerald-200 border-emerald-500 font-bold';
+      case 'BLOCKED':
+        return 'bg-amber-950/80 text-amber-300 border-amber-600 font-bold';
       case 'AGENT FAILED':
       case 'ERROR':
         return 'bg-rose-950/60 text-rose-400 border-rose-800/60';

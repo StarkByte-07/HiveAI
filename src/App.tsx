@@ -526,13 +526,60 @@ export default function App() {
         break;
       }
 
+      case 'VALIDATE': {
+        const isValidated = event.status === 'success';
+        const isFailed = event.status === 'failed';
+        setAgentStatus((prev) => ({
+          ...prev,
+          state: 'EXECUTING ACTION',
+          agentStatus: 'Validating...',
+          activity: {
+            phase: 'OBSERVE',
+            headline: isValidated ? 'Goal validation passed' : isFailed ? 'Goal validation check failed' : 'Validating goal requirements...',
+            detail: event.description,
+            explanation: event.explanation,
+            timestamp,
+            intentType: event.intentType,
+            extractedResults: event.extractedResults,
+          },
+        }));
+
+        setJourneySteps((prev) => {
+          const stepNum = event.stepNumber || prev.length + 1;
+          const updated = [...prev];
+          const existingIdx = updated.findIndex((s) => s.stepNumber === stepNum);
+          const stepItem: JourneyStep = {
+            stepNumber: stepNum,
+            action: 'assert',
+            actionType: 'VALIDATE',
+            target: 'Goal Constraint Validator',
+            description: event.description,
+            explanation: event.explanation,
+            status: isValidated ? 'success' : isFailed ? 'failed' : 'running',
+            timestamp,
+            url: event.url,
+            intentType: event.intentType,
+            extractedResults: event.extractedResults,
+          };
+          if (existingIdx >= 0) {
+            updated[existingIdx] = stepItem;
+          } else {
+            updated.push(stepItem);
+          }
+          return updated;
+        });
+        break;
+      }
+
       case 'FINISH':
       case 'COMPLETE': {
         const loopRes = event.result || event;
         const rawStatus = String(loopRes.status || loopRes.reason || 'completed').toLowerCase();
-        const isGoalMet = rawStatus === 'completed' || rawStatus === 'goal_met';
+        const isGoalMet = (rawStatus === 'completed' || rawStatus === 'goal_met') && loopRes.goalSatisfied === true;
+        const isBlocked = rawStatus === 'blocked' || event.isBlocked;
         const isStopped = rawStatus === 'stopped';
-        const finalState = isGoalMet ? 'GOAL COMPLETED' : isStopped ? 'STOPPED' : (rawStatus === 'max_steps_reached' ? 'AGENT FAILED' : 'READY');
+        const finalState = isGoalMet ? 'GOAL COMPLETED' : isBlocked ? 'BLOCKED' : isStopped ? 'STOPPED' : 'AGENT FAILED';
+        const finalReportStatus: 'Completed' | 'Blocked' | 'Failed' = isGoalMet ? 'Completed' : isBlocked ? 'Blocked' : 'Failed';
 
         const finalIntent = loopRes.intentType || event.intentType || event.action?.intentType;
         const finalResults = loopRes.extractedResults || event.extractedResults || event.action?.extractedResults;
@@ -555,31 +602,34 @@ export default function App() {
         setAgentStatus((prev) => ({
           ...prev,
           state: finalState,
-          agentStatus: isGoalMet ? 'Completed' : isStopped ? 'Stopped' : (rawStatus === 'max_steps_reached' ? 'Max Steps Reached' : 'Failed'),
+          agentStatus: isGoalMet ? 'Completed' : isBlocked ? 'Blocked' : isStopped ? 'Stopped' : (rawStatus === 'max_steps_reached' ? 'Max Steps Reached' : 'Failed'),
           isRunning: false,
           currentUrl: loopRes.finalObservation?.url || event.url || prev.currentUrl,
           intentType: finalIntent || prev.intentType,
-          extractedResults: finalResults || prev.extractedResults,
+          extractedResults: isGoalMet ? (finalResults || prev.extractedResults) : undefined,
           activity: {
             phase: 'COMPLETE',
-            headline: `Autonomous agent finished: ${loopRes.reason || loopRes.status || 'Complete'} (${loopRes.totalSteps || event.stepNumber || 0} steps)`,
+            headline: `Autonomous agent finished: ${loopRes.reason || loopRes.status || (isGoalMet ? 'Completed' : 'Failed')} (${loopRes.totalSteps || event.stepNumber || 0} steps)`,
             detail: loopRes.message || event.description,
             explanation: explanationText,
             timestamp,
             intentType: finalIntent || prev.intentType,
-            extractedResults: finalResults || prev.extractedResults,
+            extractedResults: isGoalMet ? (finalResults || prev.extractedResults) : undefined,
           },
         }));
 
         setAuditReport((prev) => ({
           goal: testingGoal.trim() || prev.goal || 'General page exploration',
-          status: isGoalMet ? 'Completed' : 'Failed',
+          status: finalReportStatus,
+          goalSatisfied: isGoalMet,
           totalSteps: loopRes.totalSteps ?? event.stepNumber ?? prev.totalSteps ?? 0,
           accessibilityFindings: audit ? (audit.totalViolations ?? 0) : prev.accessibilityFindings,
           uxFrictionFindings: 0,
           generatedAt: new Date().toLocaleTimeString(),
           intentType: finalIntent || prev.intentType,
-          extractedResults: finalResults || prev.extractedResults,
+          extractedResults: isGoalMet ? (finalResults || prev.extractedResults) : undefined,
+          rejectedResults: loopRes.rejectedResults || event.rejectedResults,
+          unmetConstraints: loopRes.unmetConstraints || event.unmetConstraints,
           accessibilityAudit: audit || prev.accessibilityAudit,
           summary: explanationText || loopRes.message || event.description,
         }));
