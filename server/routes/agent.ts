@@ -1,8 +1,129 @@
 import { Router, Request, Response } from 'express';
 import { browserManager } from '../browser/browserManager.ts';
 import { observationEngine } from '../observation/observationEngine.ts';
+import { agentLoop } from '../agent/agentLoop.ts';
 
 export const agentRouter = Router();
+
+/**
+ * POST /api/agent/run
+ * Phase 4: Full Autonomous Agent Loop
+ * Navigates, observes, reasons with Gemini, and executes real Playwright actions.
+ * Streams step-by-step progress via Server-Sent Events (SSE).
+ */
+agentRouter.post('/run', async (req: Request, res: Response): Promise<void> => {
+  const { targetUrl, goal, maxSteps } = req.body || {};
+
+  // 1. Validate targetUrl
+  if (!targetUrl || typeof targetUrl !== 'string' || targetUrl.trim().length === 0) {
+    res.status(400).json({
+      success: false,
+      status: 'ERROR',
+      message: 'A valid targetUrl is required.',
+      error: 'Missing or empty targetUrl parameter.',
+    });
+    return;
+  }
+
+  const cleanUrl = targetUrl.trim();
+  try {
+    const parsed = new URL(cleanUrl);
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      res.status(400).json({
+        success: false,
+        status: 'ERROR',
+        message: 'Target URL must start with http:// or https://',
+        error: `Unsupported protocol: ${parsed.protocol}`,
+      });
+      return;
+    }
+  } catch (urlErr) {
+    res.status(400).json({
+      success: false,
+      status: 'ERROR',
+      message: 'Invalid target URL format.',
+      error: (urlErr as Error).message,
+    });
+    return;
+  }
+
+  // Check if agent is already running
+  if (agentLoop.isLoopRunning()) {
+    res.status(409).json({
+      success: false,
+      status: 'BUSY',
+      message: 'An agent execution is already active. Please wait or stop it first.',
+    });
+    return;
+  }
+
+  // Determine if streaming is requested (default is SSE streaming)
+  const isStreaming = req.headers.accept?.includes('text/event-stream') || req.query.stream === 'true' || true;
+
+  if (isStreaming) {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders?.();
+
+    // Abort loop if client abruptly disconnects before response finishes
+    res.on('close', () => {
+      if (!res.writableEnded && agentLoop.isLoopRunning()) {
+        console.log('[AgentRun] Client aborted connection, requesting agent loop abort...');
+        agentLoop.abort();
+      }
+    });
+
+    try {
+      const result = await agentLoop.run(cleanUrl, goal || '', {
+        maxSteps: typeof maxSteps === 'number' ? maxSteps : 15,
+        onEvent: (event) => {
+          try {
+            res.write(`data: ${JSON.stringify(event)}\n\n`);
+          } catch (writeErr) {
+            console.error('[AgentRun] Error streaming event:', writeErr);
+          }
+        },
+      });
+
+      // Send terminal result wrapper
+      res.write(`data: ${JSON.stringify({ type: 'COMPLETE', result })}\n\n`);
+      res.end();
+    } catch (err: any) {
+      console.error('[AgentRun Stream Error]', err);
+      res.write(`data: ${JSON.stringify({ type: 'ERROR', error: err?.message || 'Agent error' })}\n\n`);
+      res.end();
+    }
+  } else {
+    try {
+      const result = await agentLoop.run(cleanUrl, goal || '', {
+        maxSteps: typeof maxSteps === 'number' ? maxSteps : 15,
+      });
+      res.status(200).json(result);
+    } catch (err: any) {
+      console.error('[AgentRun Error]', err);
+      res.status(500).json({
+        success: false,
+        status: 'FAILED',
+        message: err?.message || 'Agent loop failed',
+        error: err?.message,
+      });
+    }
+  }
+});
+
+/**
+ * POST /api/agent/stop
+ * Requests stopping any currently active agent execution.
+ */
+agentRouter.post('/stop', (_req: Request, res: Response): void => {
+  if (agentLoop.isLoopRunning()) {
+    agentLoop.abort();
+    res.status(200).json({ success: true, message: 'Agent stop requested.' });
+  } else {
+    res.status(200).json({ success: true, message: 'Agent was not running.' });
+  }
+});
 
 /**
  * POST /api/agent/start
@@ -141,14 +262,22 @@ agentRouter.get('/screenshot', (_req: Request, res: Response): void => {
 agentRouter.get('/status', (_req: Request, res: Response): void => {
   const status = browserManager.getStatus();
   const latestObs = observationEngine.getLatestObservation();
+  const isAgentRunning = agentLoop.isLoopRunning();
 
   res.status(200).json({
     success: true,
-    status: status.isPageActive ? 'TARGET PAGE OPENED' : status.isLaunched ? 'BROWSER LAUNCHED' : 'READY',
+    status: isAgentRunning
+      ? 'EXECUTING ACTION'
+      : status.isPageActive
+      ? 'TARGET PAGE OPENED'
+      : status.isLaunched
+      ? 'BROWSER LAUNCHED'
+      : 'READY',
     currentUrl: status.currentUrl,
     title: status.currentTitle,
     browserActive: status.isLaunched,
     isHeadlessFallback: status.isHeadlessFallback,
     hasObservation: latestObs !== null,
+    isAgentRunning,
   });
 });

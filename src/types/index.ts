@@ -1,6 +1,6 @@
 /**
- * Core type definitions for FlowSentry (Autonomous UI Auditor).
- * Phase 3: Observation Engine & Black-Box Browser State.
+ * Core type definitions for FlowSentry / HiveAI (Autonomous UI Auditor).
+ * Phase 4: Agent Reasoning + Autonomous Action
  */
 
 export type AgentRuntimeState = 
@@ -10,17 +10,34 @@ export type AgentRuntimeState =
   | 'TARGET PAGE OPENED' 
   | 'OBSERVING PAGE'
   | 'PAGE OBSERVED'
+  | 'REASONING'
+  | 'EXECUTING ACTION'
+  | 'ACTION COMPLETED'
+  | 'ACTION FAILED'
+  | 'GOAL COMPLETED'
+  | 'AGENT FAILED'
+  | 'STOPPED'
   | 'ERROR';
+
+export interface AgentActivity {
+  phase: 'NAVIGATE' | 'OBSERVE' | 'REASON' | 'ACT' | 'COMPLETE' | 'IDLE' | 'ERROR';
+  headline: string;
+  detail?: string;
+  explanation?: string;
+  timestamp?: string;
+}
 
 export interface AgentStatus {
   state: AgentRuntimeState;
   browserStatus: 'Not launched' | 'Launching' | 'Launching...' | 'Launched' | 'Active' | 'Closed' | 'Error' | string;
-  agentStatus: 'Idle' | 'Starting' | 'Starting...' | 'Ready' | 'Observing...' | 'Error' | string;
+  agentStatus: 'Idle' | 'Starting' | 'Starting...' | 'Ready' | 'Observing...' | 'Reasoning...' | 'Executing...' | 'Completed' | 'Error' | string;
   currentStep: number | null;
   currentUrl: string | null;
   pageTitle?: string | null;
   errorMessage?: string | null;
   isHeadlessFallback?: boolean;
+  activity?: AgentActivity | null;
+  isRunning?: boolean;
 }
 
 export interface InteractiveElementState {
@@ -77,7 +94,21 @@ export interface ObservationResponse {
   error?: string;
 }
 
-export type JourneyActionType = 'navigate' | 'observe' | 'click' | 'type' | 'filter' | 'scroll' | 'assert' | 'inspect';
+export type JourneyActionType = 
+  | 'navigate' 
+  | 'observe' 
+  | 'reason' 
+  | 'action' 
+  | 'click' 
+  | 'type' 
+  | 'scroll' 
+  | 'wait' 
+  | 'back' 
+  | 'filter' 
+  | 'assert' 
+  | 'inspect' 
+  | 'finish' 
+  | 'error';
 
 export interface JourneyStep {
   stepNumber: number;
@@ -85,9 +116,13 @@ export interface JourneyStep {
   description: string;
   targetSelector?: string;
   targetElementText?: string;
+  actionType?: string;
+  target?: string;
+  value?: string;
+  explanation?: string;
   url?: string;
   timestamp?: string;
-  status?: 'pending' | 'success' | 'failed';
+  status?: 'pending' | 'running' | 'success' | 'failed';
 }
 
 export type FindingCategory = 'accessibility' | 'ux_friction' | 'potential_issue';

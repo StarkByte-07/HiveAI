@@ -1,8 +1,9 @@
 import React from 'react';
-import { Play, Loader2, AlertCircle, CheckCircle2, Laptop } from 'lucide-react';
+import { Play, Loader2, AlertCircle, CheckCircle2, Bot, Square } from 'lucide-react';
 
 interface RunAgentButtonProps {
   onRunAgent: () => void;
+  onStopAgent?: () => void;
   isLaunching: boolean;
   statusMessage?: string | null;
   errorMessage?: string | null;
@@ -11,6 +12,7 @@ interface RunAgentButtonProps {
 
 export const RunAgentButton: React.FC<RunAgentButtonProps> = ({
   onRunAgent,
+  onStopAgent,
   isLaunching,
   statusMessage,
   errorMessage,
@@ -20,9 +22,21 @@ export const RunAgentButton: React.FC<RunAgentButtonProps> = ({
     <div id="run-agent-container" className="flex flex-col items-end gap-2.5">
       <div className="flex items-center gap-3">
         <span className="text-[11px] font-mono text-zinc-500 hidden sm:inline flex items-center gap-1.5">
-          <Laptop className="h-3 w-3 text-zinc-400" />
-          Phase 2: Playwright Chromium Runtime
+          <Bot className="h-3 w-3 text-cyan-400" />
+          Phase 4: Autonomous Observe → Reason → Act Loop
         </span>
+
+        {isLaunching && onStopAgent && (
+          <button
+            id="stop-agent-btn"
+            type="button"
+            onClick={onStopAgent}
+            className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-md bg-rose-950/80 hover:bg-rose-900 border border-rose-800 text-rose-200 font-mono font-bold text-xs uppercase tracking-wider transition-all cursor-pointer shadow-sm"
+          >
+            <Square className="h-3.5 w-3.5 fill-current text-rose-400" />
+            <span>STOP AGENT</span>
+          </button>
+        )}
 
         <button
           id="run-agent-btn"
@@ -34,7 +48,7 @@ export const RunAgentButton: React.FC<RunAgentButtonProps> = ({
           {isLaunching ? (
             <>
               <Loader2 className="h-3.5 w-3.5 animate-spin text-zinc-400" />
-              <span>LAUNCHING BROWSER...</span>
+              <span>AGENT RUNNING...</span>
             </>
           ) : (
             <>
@@ -54,7 +68,7 @@ export const RunAgentButton: React.FC<RunAgentButtonProps> = ({
           <AlertCircle className="h-4 w-4 text-rose-400 shrink-0 mt-0.5" />
           <div className="flex-1 space-y-1">
             <p className="font-semibold text-rose-100 font-mono">
-              Browser Launch / Navigation Error
+              Agent Execution / Navigation Alert
             </p>
             <p className="text-[11px] text-rose-300 leading-relaxed font-sans">
               {errorMessage}
@@ -82,7 +96,7 @@ export const RunAgentButton: React.FC<RunAgentButtonProps> = ({
           <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
           <div className="flex-1 space-y-1">
             <p className="font-semibold text-emerald-100 font-mono">
-              Target Page Opened in Chromium
+              Autonomous Session
             </p>
             <p className="text-[11px] text-emerald-300 leading-relaxed font-sans">
               {statusMessage}
