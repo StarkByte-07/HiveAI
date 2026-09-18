@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, Terminal, Cpu } from 'lucide-react';
+import { Terminal, Cpu } from 'lucide-react';
 
 export const Header: React.FC = () => {
   return (
@@ -13,14 +13,14 @@ export const Header: React.FC = () => {
           <div>
             <div className="flex items-center gap-2">
               <h1 className="text-lg font-bold tracking-tight text-zinc-100 uppercase font-mono">
-                AUTONOMOUS UI AUDITOR
+                FLOWSENTRY
               </h1>
               <span className="hidden sm:inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono font-medium bg-zinc-800 text-zinc-400 border border-zinc-700">
-                P8 • POC
+                P8 • PHASE 3
               </span>
             </div>
             <p className="text-xs text-zinc-400 mt-0.5 tracking-wide">
-              Agentic Black-Box UI/UX &amp; Accessibility Testing
+              Autonomous Agentic Black-Box UI/UX &amp; Accessibility Testing Framework
             </p>
           </div>
         </div>
@@ -29,11 +29,11 @@ export const Header: React.FC = () => {
         <div className="flex items-center gap-3 self-start sm:self-auto">
           <div className="flex items-center gap-2.5 px-3 py-1.5 rounded-md bg-zinc-900 border border-zinc-800 text-xs font-mono">
             <Cpu className="h-3.5 w-3.5 text-zinc-400" />
-            <span className="text-zinc-400 uppercase tracking-wider text-[11px] font-medium">LOCAL AGENT</span>
+            <span className="text-zinc-400 uppercase tracking-wider text-[11px] font-medium">OBSERVATION ENGINE</span>
             <span className="text-zinc-600">|</span>
             <span className="inline-flex items-center gap-1.5 text-emerald-400 font-semibold tracking-wide">
               <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
-              READY
+              ACTIVE
             </span>
           </div>
         </div>

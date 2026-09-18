@@ -16,6 +16,10 @@ export const AgentStatusPanel: React.FC<AgentStatusPanelProps> = ({ status }) =>
       case 'BROWSER LAUNCHED':
         return 'bg-cyan-950/60 text-cyan-400 border-cyan-800/60';
       case 'TARGET PAGE OPENED':
+        return 'bg-cyan-950/60 text-cyan-300 border-cyan-700/80';
+      case 'OBSERVING PAGE':
+        return 'bg-amber-950/60 text-amber-400 border-amber-800/60 animate-pulse';
+      case 'PAGE OBSERVED':
         return 'bg-emerald-950/60 text-emerald-300 border-emerald-700/80';
       case 'ERROR':
         return 'bg-rose-950/60 text-rose-400 border-rose-800/60';
@@ -28,8 +32,10 @@ export const AgentStatusPanel: React.FC<AgentStatusPanelProps> = ({ status }) =>
     switch (status.state) {
       case 'READY':
       case 'TARGET PAGE OPENED':
+      case 'PAGE OBSERVED':
         return 'bg-emerald-400';
       case 'STARTING BROWSER':
+      case 'OBSERVING PAGE':
         return 'bg-amber-400 animate-ping';
       case 'BROWSER LAUNCHED':
         return 'bg-cyan-400';
@@ -38,6 +44,13 @@ export const AgentStatusPanel: React.FC<AgentStatusPanelProps> = ({ status }) =>
       default:
         return 'bg-zinc-500';
     }
+  };
+
+  const formatStepName = (stepNum: number | null) => {
+    if (stepNum === null) return '—';
+    if (stepNum === 1) return '01 - Navigate';
+    if (stepNum === 2) return '02 - Observe';
+    return `${String(stepNum).padStart(2, '0')} - Step`;
   };
 
   return (
@@ -56,7 +69,7 @@ export const AgentStatusPanel: React.FC<AgentStatusPanelProps> = ({ status }) =>
           id="agent-state-badge"
           className={`flex items-center gap-1.5 px-2.5 py-0.5 rounded text-[11px] font-mono font-semibold border ${getBadgeStyle()}`}
         >
-          {status.state === 'STARTING BROWSER' ? (
+          {status.state === 'STARTING BROWSER' || status.state === 'OBSERVING PAGE' ? (
             <Loader2 className="h-2.5 w-2.5 animate-spin" />
           ) : (
             <span className={`h-1.5 w-1.5 rounded-full ${getDotStyle()}`}></span>
@@ -97,7 +110,7 @@ export const AgentStatusPanel: React.FC<AgentStatusPanelProps> = ({ status }) =>
           <div className="font-mono text-zinc-300 font-medium">
             {status.currentStep !== null ? (
               <span className="text-emerald-400 font-semibold">
-                {String(status.currentStep).padStart(2, '0')} - Navigate
+                {formatStepName(status.currentStep)}
               </span>
             ) : (
               '—'

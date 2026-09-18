@@ -1,5 +1,5 @@
 import React from 'react';
-import { Route, CheckCircle2, Clock } from 'lucide-react';
+import { Route, CheckCircle2, Clock, Compass, Eye } from 'lucide-react';
 import { JourneyStep } from '../types/index.ts';
 
 interface JourneyPanelProps {
@@ -38,38 +38,56 @@ export const JourneyPanel: React.FC<JourneyPanelProps> = ({ steps = [] }) => {
         </div>
       ) : (
         <div className="space-y-2.5">
-          {steps.map((step) => (
-            <div
-              key={step.stepNumber}
-              className="p-3 rounded-md bg-zinc-950/60 border border-zinc-800 text-xs flex items-start gap-3 animate-in fade-in"
-            >
-              <div className="flex items-center justify-center h-6 w-6 rounded bg-emerald-950/80 text-emerald-400 border border-emerald-800/60 font-mono font-bold text-[11px] shrink-0">
-                {String(step.stepNumber).padStart(2, '0')}
-              </div>
-              <div className="flex-1 min-w-0 space-y-1">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="px-1.5 py-0.5 rounded text-[10px] font-mono uppercase font-semibold bg-zinc-850 text-cyan-400 border border-zinc-700">
-                    {step.action}
-                  </span>
-                  {step.timestamp && (
-                    <span className="text-[10px] font-mono text-zinc-500 flex items-center gap-1">
-                      <Clock className="h-2.5 w-2.5" />
-                      {step.timestamp}
+          {steps.map((step) => {
+            const isNavigate = step.action === 'navigate';
+            const isObserve = step.action === 'observe';
+
+            return (
+              <div
+                key={step.stepNumber}
+                className="p-3 rounded-md bg-zinc-950/60 border border-zinc-800 text-xs flex items-start gap-3 animate-in fade-in"
+              >
+                <div
+                  className={`flex items-center justify-center h-6 w-6 rounded border font-mono font-bold text-[11px] shrink-0 ${
+                    isObserve
+                      ? 'bg-cyan-950/80 text-cyan-400 border-cyan-800/60'
+                      : 'bg-emerald-950/80 text-emerald-400 border-emerald-800/60'
+                  }`}
+                >
+                  {String(step.stepNumber).padStart(2, '0')}
+                </div>
+                <div className="flex-1 min-w-0 space-y-1">
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className={`px-1.5 py-0.5 rounded text-[10px] font-mono uppercase font-semibold border flex items-center gap-1 ${
+                        isObserve
+                          ? 'bg-cyan-950/50 text-cyan-300 border-cyan-800/50'
+                          : 'bg-emerald-950/50 text-emerald-300 border-emerald-800/50'
+                      }`}
+                    >
+                      {isObserve ? <Eye className="h-2.5 w-2.5" /> : <Compass className="h-2.5 w-2.5" />}
+                      {step.action}
                     </span>
+                    {step.timestamp && (
+                      <span className="text-[10px] font-mono text-zinc-500 flex items-center gap-1">
+                        <Clock className="h-2.5 w-2.5" />
+                        {step.timestamp}
+                      </span>
+                    )}
+                  </div>
+                  <p className="font-mono text-zinc-200 text-xs break-all">
+                    {step.description}
+                  </p>
+                  {step.url && (
+                    <p className="font-mono text-[11px] text-zinc-400 truncate">
+                      URL: <span className="text-zinc-300">{step.url}</span>
+                    </p>
                   )}
                 </div>
-                <p className="font-mono text-zinc-200 text-xs break-all">
-                  {step.description}
-                </p>
-                {step.url && (
-                  <p className="font-mono text-[11px] text-zinc-400 truncate">
-                    URL: <span className="text-zinc-300">{step.url}</span>
-                  </p>
-                )}
+                <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
               </div>
-              <CheckCircle2 className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
-            </div>
-          ))}
+            );
+          })}
           <p className="text-[10px] font-mono text-zinc-500 text-right pt-1">
             Genuine backend trace • No simulated steps
           </p>

@@ -42,6 +42,9 @@ export class BrowserManager {
         timeout: 30000,
       });
 
+      // Brief grace period for client-side hydrated SPAs (e.g. IMDb, Next.js, React)
+      await this.page.waitForTimeout(1500).catch(() => {});
+
       this.currentUrl = this.page.url();
       this.currentTitle = await this.page.title();
 
