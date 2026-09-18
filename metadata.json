@@ -1,0 +1,7 @@
+{
+  "name": "Autonomous UI Auditor",
+  "description": "Agentic Black-Box UI/UX & Accessibility Testing Framework",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
