@@ -3,6 +3,7 @@ import { observationEngine } from '../observation/observationEngine.ts';
 import type { PageObservation } from '../observation/observationTypes.ts';
 import { agentReasoner } from './agentReasoner.ts';
 import { agentExecutor } from './agentExecutor.ts';
+import { perfTimer } from '../utils/timing.ts';
 import type {
   AgentAction,
   AgentHistoryItem,
@@ -47,6 +48,7 @@ export class AgentLoop {
     this.abortRequested = false;
     const loopId = Date.now().toString();
     this.currentLoopId = loopId;
+    perfTimer.start('task_total');
 
     const maxSteps = Math.min(Math.max(config.maxSteps || 15, 3), 30);
     const journey: AgentStepEvent[] = [];
@@ -110,10 +112,27 @@ export class AgentLoop {
       };
       emitEvent(initialObsEvent);
 
+      // STEP 7: Check early if page is blocked by anti-bot/CAPTCHA/403
+      if (latestObservation.isBlocked || navResult.statusCode === 403 || navResult.statusCode === 401) {
+        const blockedMsg = latestObservation.blockedReason || `Target page returned HTTP ${navResult.statusCode} Access Denied / Anti-bot verification.`;
+        emitEvent({
+          stepNumber: currentStepNumber++,
+          type: 'ERROR',
+          status: 'failed',
+          description: blockedMsg,
+          url: latestObservation.url,
+          timestamp: new Date().toLocaleTimeString(),
+          isTerminal: true,
+        });
+        return this.finishResult(goal, journey, latestObservation, 'FAILED', blockedMsg, blockedMsg, detectedIntent, cumulativeResults);
+      }
+
       // ==========================================
       // AGENTIC AUTONOMOUS LOOP
       // ==========================================
       while (currentStepNumber <= maxSteps && !this.abortRequested) {
+        perfTimer.start('step_total');
+
         // --- 1. REASONING PHASE ---
         const reasonStepNumber = currentStepNumber++;
         const reasonTimestamp = new Date().toLocaleTimeString();
@@ -139,6 +158,7 @@ export class AgentLoop {
             intentType: detectedIntent,
           });
         } catch (reasonErr: any) {
+          perfTimer.end('step_total');
           const rawError = reasonErr?.message || 'Reasoning error';
           const errorMsg = rawError.startsWith('Gemini reasoning unavailable')
             ? rawError
@@ -188,11 +208,13 @@ export class AgentLoop {
         });
 
         if (this.abortRequested) {
+          perfTimer.end('step_total');
           return this.finishResult(goal, journey, latestObservation, 'STOPPED', 'Agent stopped by user.', undefined, detectedIntent, cumulativeResults);
         }
 
         // --- Check for FINISH action ---
         if (nextAction.action === 'finish') {
+          perfTimer.end('step_total');
           const finalExtracted = nextAction.extractedResults && nextAction.extractedResults.length > 0
             ? nextAction.extractedResults
             : (cumulativeResults.length > 0 ? [...cumulativeResults] : undefined);
@@ -269,6 +291,7 @@ export class AgentLoop {
         });
 
         if (this.abortRequested) {
+          perfTimer.end('step_total');
           return this.finishResult(goal, journey, latestObservation, 'STOPPED', 'Agent stopped by user.');
         }
 
@@ -297,6 +320,8 @@ export class AgentLoop {
         } catch (obsErr: any) {
           console.warn('[AgentLoop] Re-observation warning:', obsErr?.message);
         }
+
+        perfTimer.end('step_total');
       }
 
       // If loop exited due to step limit
@@ -331,6 +356,7 @@ export class AgentLoop {
     } finally {
       this.isRunning = false;
       this.currentLoopId = null;
+      perfTimer.end('task_total');
     }
   }
 

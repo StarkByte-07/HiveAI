@@ -39,6 +39,8 @@ export interface PageObservation {
   screenshotUrl?: string;
   timestamp: string;
   stats: ObservationStats;
+  isBlocked?: boolean;
+  blockedReason?: string;
 }
 
 export interface ObservationResponse {

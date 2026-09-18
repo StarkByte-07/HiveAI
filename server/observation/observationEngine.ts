@@ -1,5 +1,6 @@
 import { Page } from 'playwright';
 import { PageObservation, InteractiveElement, ObservationStats } from './observationTypes.ts';
+import { perfTimer } from '../utils/timing.ts';
 
 interface DomObservationPayload {
   url: string;
@@ -9,6 +10,8 @@ interface DomObservationPayload {
   contentItems?: string[];
   interactiveElements: InteractiveElement[];
   stats: ObservationStats;
+  isBlocked?: boolean;
+  blockedReason?: string;
 }
 
 export class ObservationEngine {
@@ -24,15 +27,17 @@ export class ObservationEngine {
       throw new Error('Cannot observe page: Browser page is closed or not available.');
     }
 
-    // 1. Wait briefly for network/DOM settling if recently navigated
+    perfTimer.start('observation');
+
+    // 1. Brief readiness check without long delays
     try {
-      await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
+      await page.waitForLoadState('domcontentloaded', { timeout: 2000 }).catch(() => {});
     } catch {
       // Non-blocking
     }
 
-    // 2. Extract DOM observation using standard browser evaluation script
-    // Note: Passed as raw string script so that Node/esbuild/tsx doesn't inject transpilation artifacts (like __name)
+    // 2. Extract compact DOM observation
+    perfTimer.start('dom_extraction');
     const extractionScript = `
       (() => {
         const isElementVisible = (el) => {
@@ -81,7 +86,7 @@ export class ObservationEngine {
 
           const textContent = el.innerText || el.textContent;
           if (textContent && textContent.trim()) {
-            return textContent.replace(/\\s+/g, ' ').trim().slice(0, 80);
+            return textContent.replace(/\\s+/g, ' ').trim().slice(0, 60);
           }
 
           return '';
@@ -138,10 +143,10 @@ export class ObservationEngine {
 
           const role = getElementRole(el);
           const name = getAccessibleName(el);
-          const rawText = (el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 80);
+          const rawText = (el.innerText || '').replace(/\\s+/g, ' ').trim().slice(0, 60);
 
           const dedupeKey = role + ':' + name + ':' + el.tagName;
-          if (name && seenKeys.has(dedupeKey) && observedInteractive.length > 20) {
+          if (name && seenKeys.has(dedupeKey) && observedInteractive.length > 15) {
             continue;
           }
           if (name) seenKeys.add(dedupeKey);
@@ -152,7 +157,7 @@ export class ObservationEngine {
 
           let value = undefined;
           if (el.tagName === 'INPUT' && el.type !== 'password' && el.value) {
-            value = el.value.slice(0, 50);
+            value = el.value.slice(0, 40);
           }
 
           if (role === 'button') btnCount++;
@@ -174,7 +179,7 @@ export class ObservationEngine {
             },
           });
 
-          if (observedInteractive.length >= 60) break;
+          if (observedInteractive.length >= 35) break;
         }
 
         const headingElements = Array.from(document.querySelectorAll('h1, h2, h3, h4'));
@@ -182,9 +187,9 @@ export class ObservationEngine {
           .filter(isElementVisible)
           .map((h) => (h.innerText || '').replace(/\\s+/g, ' ').trim())
           .filter((t) => t.length > 0)
-          .slice(0, 20);
+          .slice(0, 10);
 
-        // Extract structured result cards, list items, and article entries
+        // Extract structured result cards/items
         const cardSelectors = [
           'li',
           '[role="listitem"]',
@@ -208,18 +213,16 @@ export class ObservationEngine {
           const card = cardCandidates[c];
           if (!isElementVisible(card)) continue;
 
-          // Exclude oversized layout wrappers
           const rect = card.getBoundingClientRect();
           if (rect.height > 900 || rect.width > 1600) continue;
 
           const text = (card.innerText || '').replace(/\\s+/g, ' ').trim();
-          if (text.length >= 10 && text.length <= 400) {
-            // Normalize for deduplication
-            const norm = text.toLowerCase().slice(0, 80);
+          if (text.length >= 10 && text.length <= 300) {
+            const norm = text.toLowerCase().slice(0, 60);
             if (!seenCardText.has(norm)) {
               seenCardText.add(norm);
               observedContentItems.push(text);
-              if (observedContentItems.length >= 35) break;
+              if (observedContentItems.length >= 20) break;
             }
           }
         }
@@ -232,23 +235,22 @@ export class ObservationEngine {
         const visibleTextBlocks = [];
         const seenText = new Set();
 
-        // Include key content items into visible text if available
         for (let k = 0; k < observedContentItems.length; k++) {
           const itemText = observedContentItems[k];
-          seenText.add(itemText.toLowerCase().slice(0, 80));
+          seenText.add(itemText.toLowerCase().slice(0, 60));
           visibleTextBlocks.push(itemText);
-          if (visibleTextBlocks.length >= 25) break;
+          if (visibleTextBlocks.length >= 15) break;
         }
 
         for (let j = 0; j < textContainers.length; j++) {
           const block = textContainers[j];
           if (!isElementVisible(block)) continue;
           const text = (block.innerText || '').replace(/\\s+/g, ' ').trim();
-          const norm = text.toLowerCase().slice(0, 80);
+          const norm = text.toLowerCase().slice(0, 60);
           if (text.length >= 12 && !seenText.has(norm)) {
             seenText.add(norm);
-            visibleTextBlocks.push(text.slice(0, 250));
-            if (visibleTextBlocks.length >= 35) break;
+            visibleTextBlocks.push(text.slice(0, 160));
+            if (visibleTextBlocks.length >= 20) break;
           }
         }
 
@@ -257,9 +259,30 @@ export class ObservationEngine {
             .split('\\n')
             .map((s) => s.trim())
             .filter((s) => s.length >= 15)
-            .slice(0, 20);
+            .slice(0, 10);
           visibleTextBlocks.push(...bodySnippet);
         }
+
+        // Early detection of blocked / anti-bot / CAPTCHA pages
+        const fullPageText = ((document.title || '') + ' ' + headings.join(' ') + ' ' + visibleTextBlocks.join(' ')).toLowerCase();
+        const blockKeywords = [
+          'attention required! | cloudflare',
+          'access denied',
+          'security check',
+          'just a moment...',
+          'robot check',
+          'are you a human',
+          'verify you are human',
+          'bot detection',
+          'pardon our interruption',
+          'recaptcha',
+          'cf-browser-verification',
+          '403 forbidden'
+        ];
+        const isBlocked = blockKeywords.some((kw) => fullPageText.includes(kw));
+        const blockedReason = isBlocked
+          ? 'Target page is inaccessible because it returned a CAPTCHA/access-denied page.'
+          : undefined;
 
         return {
           url: window.location.href,
@@ -268,6 +291,8 @@ export class ObservationEngine {
           visibleText: visibleTextBlocks,
           contentItems: observedContentItems,
           interactiveElements: observedInteractive,
+          isBlocked,
+          blockedReason,
           stats: {
             totalInteractiveCount: observedInteractive.length,
             buttonCount: btnCount,
@@ -287,26 +312,30 @@ export class ObservationEngine {
         evalErr?.message?.includes('Execution context was destroyed') ||
         evalErr?.message?.includes('navigating')
       ) {
-        await page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
-        await page.waitForTimeout(1000).catch(() => {});
+        await page.waitForLoadState('domcontentloaded', { timeout: 2000 }).catch(() => {});
         rawDomObservation = (await page.evaluate(extractionScript)) as DomObservationPayload;
       } else {
         throw evalErr;
       }
+    } finally {
+      perfTimer.end('dom_extraction');
     }
 
-    // 3. Capture real screenshot via Playwright
+    // 3. Fast screenshot capture via Playwright for audit/reporting
+    perfTimer.start('screenshot');
     let screenshotBase64: string | undefined;
     try {
       const buffer = await page.screenshot({
         type: 'jpeg',
-        quality: 75,
+        quality: 60,
         fullPage: false,
       });
       this.latestScreenshotBuffer = buffer;
       screenshotBase64 = `data:image/jpeg;base64,${buffer.toString('base64')}`;
     } catch (screenshotErr) {
       console.warn('[ObservationEngine] Screenshot capture failed:', screenshotErr);
+    } finally {
+      perfTimer.end('screenshot');
     }
 
     const observation: PageObservation = {
@@ -316,6 +345,8 @@ export class ObservationEngine {
       visibleText: rawDomObservation.visibleText,
       contentItems: rawDomObservation.contentItems || [],
       interactiveElements: rawDomObservation.interactiveElements,
+      isBlocked: rawDomObservation.isBlocked,
+      blockedReason: rawDomObservation.blockedReason,
       screenshotBase64,
       screenshotUrl: '/api/agent/screenshot',
       timestamp: new Date().toLocaleTimeString(),
@@ -323,6 +354,7 @@ export class ObservationEngine {
     };
 
     this.latestObservation = observation;
+    perfTimer.end('observation');
     return observation;
   }
 

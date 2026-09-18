@@ -1,9 +1,11 @@
 import { chromium, Browser, BrowserContext, Page } from 'playwright';
+import { perfTimer } from '../utils/timing.ts';
 
 export interface BrowserNavigationResult {
   success: boolean;
   url: string;
   title: string;
+  statusCode?: number;
   isHeadlessFallback?: boolean;
 }
 
@@ -13,6 +15,7 @@ export class BrowserManager {
   private page: Page | null = null;
   private currentUrl: string | null = null;
   private currentTitle: string | null = null;
+  private lastStatusCode: number | null = null;
   private isHeadlessFallback: boolean = false;
 
   /**
@@ -32,23 +35,26 @@ export class BrowserManager {
     }
 
     try {
-      // Set reasonable default timeouts (30 seconds)
-      this.page.setDefaultNavigationTimeout(30000);
-      this.page.setDefaultTimeout(30000);
+      // Set reasonable default timeouts (15 seconds)
+      this.page.setDefaultNavigationTimeout(15000);
+      this.page.setDefaultTimeout(15000);
 
-      // Navigate to target URL
+      // Navigate to target URL with performance timing
+      perfTimer.start('navigation');
       const response = await this.page.goto(targetUrl, {
         waitUntil: 'domcontentloaded',
-        timeout: 30000,
+        timeout: 15000,
       });
 
-      // Brief grace period for client-side hydrated SPAs (e.g. IMDb, Next.js, React)
-      await this.page.waitForTimeout(1500).catch(() => {});
+      // Quick DOM readiness check without arbitrary long sleeps
+      await this.page.waitForLoadState('domcontentloaded', { timeout: 2000 }).catch(() => {});
+      perfTimer.end('navigation');
 
       this.currentUrl = this.page.url();
       this.currentTitle = await this.page.title();
 
       const statusCode = response?.status();
+      this.lastStatusCode = statusCode || null;
       if (statusCode && statusCode >= 400) {
         this.currentTitle = `${this.currentTitle || 'Error'} (HTTP ${statusCode})`;
       }
@@ -57,15 +63,18 @@ export class BrowserManager {
         success: true,
         url: this.currentUrl,
         title: this.currentTitle || 'Untitled Page',
+        statusCode: this.lastStatusCode || undefined,
         isHeadlessFallback: this.isHeadlessFallback,
       };
     } catch (err: any) {
+      perfTimer.end('navigation');
       const errorMsg = err?.message || 'Navigation failed';
       throw new Error(`Navigation to "${targetUrl}" failed: ${errorMsg}`);
     }
   }
 
   private async launchBrowser(): Promise<void> {
+    perfTimer.start('browser_start');
     // Close any lingering previous instance
     await this.close();
 
@@ -112,6 +121,7 @@ export class BrowserManager {
     });
 
     this.page = await this.context.newPage();
+    perfTimer.end('browser_start');
 
     // Listen to browser closure
     this.browser.on('disconnected', () => {

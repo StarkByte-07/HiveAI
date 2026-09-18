@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { browserManager } from '../browser/browserManager.ts';
 import { observationEngine } from '../observation/observationEngine.ts';
 import { agentLoop } from '../agent/agentLoop.ts';
+import { agentReasoner } from '../agent/agentReasoner.ts';
 
 export const agentRouter = Router();
 
@@ -279,5 +280,16 @@ agentRouter.get('/status', (_req: Request, res: Response): void => {
     isHeadlessFallback: status.isHeadlessFallback,
     hasObservation: latestObs !== null,
     isAgentRunning,
+  });
+});
+
+/**
+ * GET /api/agent/model-info
+ * Returns the current Gemini model, SDK version, and thinking configuration.
+ */
+agentRouter.get('/model-info', (_req: Request, res: Response): void => {
+  res.status(200).json({
+    success: true,
+    ...agentReasoner.getActiveModelInfo(),
   });
 });

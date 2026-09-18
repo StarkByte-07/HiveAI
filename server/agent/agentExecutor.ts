@@ -1,6 +1,7 @@
 import { Page, Locator } from 'playwright';
 import type { AgentAction, AgentExecutionResult } from './agentTypes.ts';
 import type { PageObservation, InteractiveElement } from '../observation/observationTypes.ts';
+import { perfTimer } from '../utils/timing.ts';
 
 export class AgentExecutor {
   /**
@@ -20,47 +21,60 @@ export class AgentExecutor {
       };
     }
 
+    perfTimer.start('action');
     try {
+      let result: AgentExecutionResult;
       switch (action.action) {
         case 'click': {
           const target = (action.elementId || action.target || '').trim();
-          return await this.executeClick(page, target, observation);
+          result = await this.executeClick(page, target, observation);
+          break;
         }
 
         case 'type': {
           const target = (action.elementId || action.target || '').trim();
           const value = (action.text !== undefined ? action.text : (action.value || '')).trim();
-          return await this.executeType(page, target, value, observation);
+          result = await this.executeType(page, target, value, observation);
+          break;
         }
 
         case 'scroll':
-          return await this.executeScroll(page, action.direction || 'down');
+          result = await this.executeScroll(page, action.direction || 'down');
+          break;
 
         case 'wait':
-          return await this.executeWait(page, action.milliseconds);
+          result = await this.executeWait(page, action.milliseconds);
+          break;
 
         case 'back':
-          return await this.executeBack(page);
+          result = await this.executeBack(page);
+          break;
 
         case 'navigate':
-          return await this.executeNavigate(page, action.url!);
+          result = await this.executeNavigate(page, action.url!);
+          break;
 
         case 'finish':
-          return {
+          result = {
             success: true,
             message: action.reason || action.explanation || 'Agent determined testing goal is completed.',
             currentUrl: page.url(),
             currentTitle: await page.title().catch(() => 'Untitled'),
           };
+          break;
 
         default:
-          return {
+          result = {
             success: false,
             message: `Unknown action type: ${(action as any).action}`,
             error: 'Unsupported action',
           };
+          break;
       }
+      perfTimer.end('action');
+      return result;
     } catch (err: any) {
+      perfTimer.end('action');
       console.error(`[AgentExecutor] Action "${action.action}" failed:`, err?.message || err);
       return {
         success: false,
@@ -82,15 +96,21 @@ export class AgentExecutor {
       throw new Error(`Could not find interactive element matching target: "${target}"`);
     }
 
+    const urlBefore = page.url();
+
     // Scroll into view if needed
-    await locator.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
+    await locator.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
 
     // Click with bounded timeout
     await locator.click({ timeout: 5000 });
 
-    // Brief settling period for navigation or UI animations
-    await page.waitForLoadState('domcontentloaded', { timeout: 3000 }).catch(() => {});
-    await page.waitForTimeout(1000).catch(() => {});
+    // Wait for DOM readiness without long fixed sleep
+    await page.waitForLoadState('domcontentloaded', { timeout: 2000 }).catch(() => {});
+    if (page.url() !== urlBefore) {
+      await page.waitForTimeout(200).catch(() => {});
+    } else {
+      await page.waitForTimeout(100).catch(() => {});
+    }
 
     const currentUrl = page.url();
     const currentTitle = await page.title().catch(() => 'Untitled');
@@ -114,17 +134,17 @@ export class AgentExecutor {
       throw new Error(`Could not find input element matching target: "${target}"`);
     }
 
-    await locator.scrollIntoViewIfNeeded({ timeout: 3000 }).catch(() => {});
-    await locator.click({ timeout: 4000 }).catch(() => {});
+    await locator.scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {});
+    await locator.click({ timeout: 3000 }).catch(() => {});
     
     // Clear and fill the value
-    await locator.fill(value, { timeout: 4000 });
+    await locator.fill(value, { timeout: 3000 });
 
     // For search boxes and text inputs, submit with Enter to trigger search/form actions
     await locator.press('Enter').catch(() => {});
 
-    await page.waitForLoadState('domcontentloaded', { timeout: 3000 }).catch(() => {});
-    await page.waitForTimeout(1200).catch(() => {});
+    await page.waitForLoadState('domcontentloaded', { timeout: 2000 }).catch(() => {});
+    await page.waitForTimeout(200).catch(() => {});
 
     const currentUrl = page.url();
     const currentTitle = await page.title().catch(() => 'Untitled');
@@ -140,10 +160,10 @@ export class AgentExecutor {
   private async executeScroll(page: Page, direction: 'up' | 'down'): Promise<AgentExecutionResult> {
     const scrollAmount = direction === 'up' ? -650 : 650;
     await page.evaluate((amount) => {
-      window.scrollBy({ top: amount, left: 0, behavior: 'smooth' });
+      window.scrollBy({ top: amount, left: 0, behavior: 'instant' });
     }, scrollAmount);
 
-    await page.waitForTimeout(700);
+    await page.waitForTimeout(100);
 
     return {
       success: true,
@@ -155,8 +175,8 @@ export class AgentExecutor {
 
   private async executeWait(page: Page, milliseconds?: number): Promise<AgentExecutionResult> {
     const duration = typeof milliseconds === 'number' && !isNaN(milliseconds)
-      ? Math.max(200, Math.min(milliseconds, 10000))
-      : 1500;
+      ? Math.max(100, Math.min(milliseconds, 3000))
+      : 500;
     await page.waitForTimeout(duration);
     return {
       success: true,
@@ -168,7 +188,7 @@ export class AgentExecutor {
 
   private async executeBack(page: Page): Promise<AgentExecutionResult> {
     await page.goBack({ timeout: 8000, waitUntil: 'domcontentloaded' }).catch(() => {});
-    await page.waitForTimeout(1000);
+    await page.waitForTimeout(150);
 
     return {
       success: true,
@@ -179,8 +199,8 @@ export class AgentExecutor {
   }
 
   private async executeNavigate(page: Page, url: string): Promise<AgentExecutionResult> {
-    await page.goto(url, { timeout: 25000, waitUntil: 'domcontentloaded' });
-    await page.waitForTimeout(1500);
+    await page.goto(url, { timeout: 15000, waitUntil: 'domcontentloaded' });
+    await page.waitForTimeout(200);
 
     return {
       success: true,
