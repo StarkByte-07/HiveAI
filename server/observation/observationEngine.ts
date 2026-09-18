@@ -6,6 +6,7 @@ interface DomObservationPayload {
   title: string;
   headings: string[];
   visibleText: string[];
+  contentItems?: string[];
   interactiveElements: InteractiveElement[];
   stats: ObservationStats;
 }
@@ -176,28 +177,78 @@ export class ObservationEngine {
           if (observedInteractive.length >= 60) break;
         }
 
-        const headingElements = Array.from(document.querySelectorAll('h1, h2, h3'));
+        const headingElements = Array.from(document.querySelectorAll('h1, h2, h3, h4'));
         const headings = headingElements
           .filter(isElementVisible)
           .map((h) => (h.innerText || '').replace(/\\s+/g, ' ').trim())
           .filter((t) => t.length > 0)
-          .slice(0, 15);
+          .slice(0, 20);
 
+        // Extract structured result cards, list items, and article entries
+        const cardSelectors = [
+          'li',
+          '[role="listitem"]',
+          'article',
+          '[role="article"]',
+          'tr',
+          '[data-testid*="item"]',
+          '[data-testid*="card"]',
+          '[data-testid*="result"]',
+          '[class*="ipc-metadata-list-summary-item"]',
+          '[class*="result-item"]',
+          '[class*="movie-card"]',
+          '[class*="title-card"]'
+        ].join(', ');
+
+        const cardCandidates = Array.from(document.querySelectorAll(cardSelectors));
+        const observedContentItems = [];
+        const seenCardText = new Set();
+
+        for (let c = 0; c < cardCandidates.length; c++) {
+          const card = cardCandidates[c];
+          if (!isElementVisible(card)) continue;
+
+          // Exclude oversized layout wrappers
+          const rect = card.getBoundingClientRect();
+          if (rect.height > 900 || rect.width > 1600) continue;
+
+          const text = (card.innerText || '').replace(/\\s+/g, ' ').trim();
+          if (text.length >= 10 && text.length <= 400) {
+            // Normalize for deduplication
+            const norm = text.toLowerCase().slice(0, 80);
+            if (!seenCardText.has(norm)) {
+              seenCardText.add(norm);
+              observedContentItems.push(text);
+              if (observedContentItems.length >= 35) break;
+            }
+          }
+        }
+
+        // Extract paragraphs and key text blocks
         const textContainers = Array.from(
-          document.querySelectorAll('p, article, [role="article"], main, [role="main"], section, blockquote')
+          document.querySelectorAll('p, blockquote, dt, dd, figcaption, [role="paragraph"]')
         );
 
         const visibleTextBlocks = [];
         const seenText = new Set();
 
+        // Include key content items into visible text if available
+        for (let k = 0; k < observedContentItems.length; k++) {
+          const itemText = observedContentItems[k];
+          seenText.add(itemText.toLowerCase().slice(0, 80));
+          visibleTextBlocks.push(itemText);
+          if (visibleTextBlocks.length >= 25) break;
+        }
+
         for (let j = 0; j < textContainers.length; j++) {
           const block = textContainers[j];
           if (!isElementVisible(block)) continue;
           const text = (block.innerText || '').replace(/\\s+/g, ' ').trim();
-          if (text.length >= 10 && !seenText.has(text)) {
-            seenText.add(text);
-            visibleTextBlocks.push(text.slice(0, 200));
-            if (visibleTextBlocks.length >= 25) break;
+          const norm = text.toLowerCase().slice(0, 80);
+          if (text.length >= 12 && !seenText.has(norm)) {
+            seenText.add(norm);
+            visibleTextBlocks.push(text.slice(0, 250));
+            if (visibleTextBlocks.length >= 35) break;
           }
         }
 
@@ -206,7 +257,7 @@ export class ObservationEngine {
             .split('\\n')
             .map((s) => s.trim())
             .filter((s) => s.length >= 15)
-            .slice(0, 15);
+            .slice(0, 20);
           visibleTextBlocks.push(...bodySnippet);
         }
 
@@ -215,6 +266,7 @@ export class ObservationEngine {
           title: document.title || 'Untitled Page',
           headings: headings,
           visibleText: visibleTextBlocks,
+          contentItems: observedContentItems,
           interactiveElements: observedInteractive,
           stats: {
             totalInteractiveCount: observedInteractive.length,
@@ -262,6 +314,7 @@ export class ObservationEngine {
       title: rawDomObservation.title,
       headings: rawDomObservation.headings,
       visibleText: rawDomObservation.visibleText,
+      contentItems: rawDomObservation.contentItems || [],
       interactiveElements: rawDomObservation.interactiveElements,
       screenshotBase64,
       screenshotUrl: '/api/agent/screenshot',

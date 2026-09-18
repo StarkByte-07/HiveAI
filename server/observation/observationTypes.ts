@@ -33,6 +33,7 @@ export interface PageObservation {
   title: string;
   headings: string[];
   visibleText: string[];
+  contentItems?: string[];
   interactiveElements: InteractiveElement[];
   screenshotBase64?: string;
   screenshotUrl?: string;

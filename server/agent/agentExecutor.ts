@@ -22,17 +22,22 @@ export class AgentExecutor {
 
     try {
       switch (action.action) {
-        case 'click':
-          return await this.executeClick(page, action.target!, observation);
+        case 'click': {
+          const target = (action.elementId || action.target || '').trim();
+          return await this.executeClick(page, target, observation);
+        }
 
-        case 'type':
-          return await this.executeType(page, action.target!, action.value!, observation);
+        case 'type': {
+          const target = (action.elementId || action.target || '').trim();
+          const value = (action.text !== undefined ? action.text : (action.value || '')).trim();
+          return await this.executeType(page, target, value, observation);
+        }
 
         case 'scroll':
           return await this.executeScroll(page, action.direction || 'down');
 
         case 'wait':
-          return await this.executeWait(page);
+          return await this.executeWait(page, action.milliseconds);
 
         case 'back':
           return await this.executeBack(page);
@@ -43,7 +48,7 @@ export class AgentExecutor {
         case 'finish':
           return {
             success: true,
-            message: action.explanation || 'Agent determined testing goal is completed.',
+            message: action.reason || action.explanation || 'Agent determined testing goal is completed.',
             currentUrl: page.url(),
             currentTitle: await page.title().catch(() => 'Untitled'),
           };
@@ -148,11 +153,14 @@ export class AgentExecutor {
     };
   }
 
-  private async executeWait(page: Page): Promise<AgentExecutionResult> {
-    await page.waitForTimeout(1500);
+  private async executeWait(page: Page, milliseconds?: number): Promise<AgentExecutionResult> {
+    const duration = typeof milliseconds === 'number' && !isNaN(milliseconds)
+      ? Math.max(200, Math.min(milliseconds, 10000))
+      : 1500;
+    await page.waitForTimeout(duration);
     return {
       success: true,
-      message: 'Waited 1.5 seconds for dynamic content to settle.',
+      message: `Waited ${(duration / 1000).toFixed(1)} seconds for dynamic content to settle.`,
       currentUrl: page.url(),
       currentTitle: await page.title().catch(() => 'Untitled'),
     };

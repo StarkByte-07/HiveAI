@@ -3,6 +3,22 @@
  * Phase 4: Agent Reasoning + Autonomous Action
  */
 
+export type GoalIntentType = 
+  | 'NAVIGATION' 
+  | 'SEARCH' 
+  | 'INFORMATION_RETRIEVAL' 
+  | 'ACTION' 
+  | 'VERIFICATION';
+
+export interface ExtractedResultItem {
+  name: string;
+  rating?: string;
+  details?: string;
+  source?: string;
+  url?: string;
+  metadata?: Record<string, any>;
+}
+
 export type AgentRuntimeState = 
   | 'READY' 
   | 'STARTING BROWSER' 
@@ -25,6 +41,8 @@ export interface AgentActivity {
   detail?: string;
   explanation?: string;
   timestamp?: string;
+  extractedResults?: ExtractedResultItem[];
+  intentType?: GoalIntentType;
 }
 
 export interface AgentStatus {
@@ -38,6 +56,8 @@ export interface AgentStatus {
   isHeadlessFallback?: boolean;
   activity?: AgentActivity | null;
   isRunning?: boolean;
+  intentType?: GoalIntentType;
+  extractedResults?: ExtractedResultItem[];
 }
 
 export interface InteractiveElementState {
@@ -69,6 +89,7 @@ export interface PageObservation {
   title: string;
   headings: string[];
   visibleText: string[];
+  contentItems?: string[];
   interactiveElements: InteractiveElement[];
   screenshotBase64?: string;
   screenshotUrl?: string;
@@ -123,6 +144,8 @@ export interface JourneyStep {
   url?: string;
   timestamp?: string;
   status?: 'pending' | 'running' | 'success' | 'failed';
+  intentType?: GoalIntentType;
+  extractedResults?: ExtractedResultItem[];
 }
 
 export type FindingCategory = 'accessibility' | 'ux_friction' | 'potential_issue';
@@ -160,4 +183,7 @@ export interface AuditReport {
   accessibilityFindings: number | null;
   uxFrictionFindings: number | null;
   generatedAt?: string | null;
+  intentType?: GoalIntentType | null;
+  extractedResults?: ExtractedResultItem[] | null;
+  summary?: string | null;
 }

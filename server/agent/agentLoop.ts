@@ -9,6 +9,8 @@ import type {
   AgentStepEvent,
   AgentLoopConfig,
   AgentLoopResult,
+  GoalIntentType,
+  ExtractedResultItem,
 } from './agentTypes.ts';
 
 export class AgentLoop {
@@ -49,6 +51,8 @@ export class AgentLoop {
     const maxSteps = Math.min(Math.max(config.maxSteps || 15, 3), 30);
     const journey: AgentStepEvent[] = [];
     const history: AgentHistoryItem[] = [];
+    const cumulativeResults: ExtractedResultItem[] = [];
+    let detectedIntent: GoalIntentType = 'NAVIGATION';
     let currentStepNumber = 1;
     let latestObservation: PageObservation | null = null;
 
@@ -131,18 +135,36 @@ export class AgentLoop {
             maxSteps,
             observation: latestObservation,
             history,
+            cumulativeResults,
+            intentType: detectedIntent,
           });
         } catch (reasonErr: any) {
-          const errorMsg = reasonErr?.message || 'Reasoning error';
+          const rawError = reasonErr?.message || 'Reasoning error';
+          const errorMsg = rawError.startsWith('Gemini reasoning unavailable')
+            ? rawError
+            : `Agent reasoning failed: ${rawError}`;
           emitEvent({
             stepNumber: currentStepNumber++,
             type: 'ERROR',
             status: 'failed',
-            description: `Agent reasoning failed: ${errorMsg}`,
+            description: errorMsg,
             timestamp: new Date().toLocaleTimeString(),
             isTerminal: true,
           });
-          return this.finishResult(goal, journey, latestObservation, 'FAILED', errorMsg, errorMsg);
+          return this.finishResult(goal, journey, latestObservation, 'FAILED', errorMsg, errorMsg, detectedIntent, cumulativeResults);
+        }
+
+        if (nextAction.intentType) {
+          detectedIntent = nextAction.intentType;
+        }
+
+        if (nextAction.extractedResults && nextAction.extractedResults.length > 0) {
+          for (const item of nextAction.extractedResults) {
+            const key = item.name.toLowerCase().trim();
+            if (!cumulativeResults.some((r) => r.name.toLowerCase().trim() === key)) {
+              cumulativeResults.push(item);
+            }
+          }
         }
 
         // Emit completed reasoning event with chosen action details
@@ -159,22 +181,30 @@ export class AgentLoop {
           actionType: nextAction.action,
           target: nextAction.target,
           explanation: nextAction.explanation,
+          intentType: detectedIntent,
+          extractedResults: cumulativeResults.length > 0 ? [...cumulativeResults] : undefined,
           description: `Selected: ${actionDisplay}${targetDisplay}${valueDisplay}${dirDisplay}. Reasoning: ${nextAction.explanation || 'Moving toward goal.'}`,
           timestamp: new Date().toLocaleTimeString(),
         });
 
         if (this.abortRequested) {
-          return this.finishResult(goal, journey, latestObservation, 'STOPPED', 'Agent stopped by user.');
+          return this.finishResult(goal, journey, latestObservation, 'STOPPED', 'Agent stopped by user.', undefined, detectedIntent, cumulativeResults);
         }
 
         // --- Check for FINISH action ---
         if (nextAction.action === 'finish') {
+          const finalExtracted = nextAction.extractedResults && nextAction.extractedResults.length > 0
+            ? nextAction.extractedResults
+            : (cumulativeResults.length > 0 ? [...cumulativeResults] : undefined);
+
           const finishEvent: AgentStepEvent = {
             stepNumber: currentStepNumber++,
             type: 'FINISH',
             status: 'success',
             action: nextAction,
             actionType: 'finish',
+            intentType: detectedIntent,
+            extractedResults: finalExtracted,
             description: `Goal completed: ${nextAction.explanation || 'Agent determined the testing goal is fulfilled.'}`,
             explanation: nextAction.explanation,
             url: page.url(),
@@ -182,7 +212,16 @@ export class AgentLoop {
             isTerminal: true,
           };
           emitEvent(finishEvent);
-          return this.finishResult(goal, journey, latestObservation, 'COMPLETED', finishEvent.description);
+          return this.finishResult(
+            goal,
+            journey,
+            latestObservation,
+            'COMPLETED',
+            finishEvent.description,
+            undefined,
+            detectedIntent,
+            finalExtracted
+          );
         }
 
         // --- 2. EXECUTION PHASE ---
@@ -221,7 +260,11 @@ export class AgentLoop {
           target: nextAction.target,
           explanation: nextAction.explanation,
           description: execResult.message,
-          url: execResult.currentUrl,
+          result: {
+            success: execResult.success,
+            message: execResult.message,
+          },
+          url: execResult.currentUrl || page.url(),
           timestamp: new Date().toLocaleTimeString(),
         });
 
@@ -235,6 +278,7 @@ export class AgentLoop {
           stepNumber: reobsStepNumber,
           type: 'OBSERVE',
           status: 'running',
+          url: page.url(),
           description: 'Re-observing page state following action execution...',
           timestamp: new Date().toLocaleTimeString(),
         });
@@ -261,15 +305,17 @@ export class AgentLoop {
           stepNumber: currentStepNumber++,
           type: 'FINISH',
           status: 'success',
+          intentType: detectedIntent,
+          extractedResults: cumulativeResults.length > 0 ? [...cumulativeResults] : undefined,
           description: `Maximum step limit reached (${maxSteps} steps). Autonomous execution concluded.`,
           timestamp: new Date().toLocaleTimeString(),
           isTerminal: true,
         };
         emitEvent(limitEvent);
-        return this.finishResult(goal, journey, latestObservation, 'MAX_STEPS_REACHED', limitEvent.description);
+        return this.finishResult(goal, journey, latestObservation, 'MAX_STEPS_REACHED', limitEvent.description, undefined, detectedIntent, cumulativeResults);
       }
 
-      return this.finishResult(goal, journey, latestObservation, 'COMPLETED', 'Agent loop finished.');
+      return this.finishResult(goal, journey, latestObservation, 'COMPLETED', 'Agent loop finished.', undefined, detectedIntent, cumulativeResults);
     } catch (fatalErr: any) {
       console.error('[AgentLoop] Fatal error:', fatalErr);
       const errorMsg = fatalErr?.message || 'Unknown agent execution error';
@@ -281,7 +327,7 @@ export class AgentLoop {
         timestamp: new Date().toLocaleTimeString(),
         isTerminal: true,
       });
-      return this.finishResult(goal, journey, latestObservation, 'FAILED', errorMsg, errorMsg);
+      return this.finishResult(goal, journey, latestObservation, 'FAILED', errorMsg, errorMsg, detectedIntent, cumulativeResults);
     } finally {
       this.isRunning = false;
       this.currentLoopId = null;
@@ -294,12 +340,16 @@ export class AgentLoop {
     finalObservation: PageObservation | null,
     status: 'COMPLETED' | 'MAX_STEPS_REACHED' | 'FAILED' | 'STOPPED',
     message: string,
-    error?: string
+    error?: string,
+    intentType?: GoalIntentType,
+    extractedResults?: ExtractedResultItem[]
   ): AgentLoopResult {
     return {
       success: status === 'COMPLETED' || status === 'MAX_STEPS_REACHED',
       status,
       goal,
+      intentType,
+      extractedResults,
       totalSteps: journey.length,
       journey,
       finalObservation,

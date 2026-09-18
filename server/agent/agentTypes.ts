@@ -1,5 +1,21 @@
 import type { PageObservation } from '../observation/observationTypes.ts';
 
+export type GoalIntentType = 
+  | 'NAVIGATION' 
+  | 'SEARCH' 
+  | 'INFORMATION_RETRIEVAL' 
+  | 'ACTION' 
+  | 'VERIFICATION';
+
+export interface ExtractedResultItem {
+  name: string;
+  rating?: string;
+  details?: string;
+  source?: string;
+  url?: string;
+  metadata?: Record<string, any>;
+}
+
 export type AgentActionType = 
   | 'click' 
   | 'type' 
@@ -12,10 +28,16 @@ export type AgentActionType =
 export interface AgentAction {
   action: AgentActionType;
   target?: string;
+  elementId?: string;
   value?: string;
+  text?: string;
   direction?: 'up' | 'down';
+  milliseconds?: number;
   url?: string;
   explanation?: string;
+  reason?: string;
+  intentType?: GoalIntentType;
+  extractedResults?: ExtractedResultItem[];
 }
 
 export interface AgentHistoryItem {
@@ -32,6 +54,8 @@ export interface AgentReasoningInput {
   maxSteps: number;
   observation: PageObservation;
   history: AgentHistoryItem[];
+  cumulativeResults?: ExtractedResultItem[];
+  intentType?: GoalIntentType;
 }
 
 export type AgentStepEventType = 
@@ -53,6 +77,13 @@ export interface AgentStepEvent {
   explanation?: string;
   url?: string;
   timestamp: string;
+  intentType?: GoalIntentType;
+  extractedResults?: ExtractedResultItem[];
+  result?: {
+    success: boolean;
+    message: string;
+    error?: string;
+  };
   observation?: PageObservation;
   isTerminal?: boolean;
 }
@@ -75,6 +106,8 @@ export interface AgentLoopResult {
   success: boolean;
   status: 'COMPLETED' | 'MAX_STEPS_REACHED' | 'FAILED' | 'STOPPED';
   goal: string;
+  intentType?: GoalIntentType;
+  extractedResults?: ExtractedResultItem[];
   totalSteps: number;
   journey: AgentStepEvent[];
   finalObservation?: PageObservation | null;

@@ -23,6 +23,7 @@ import {
   FindingsSummary,
   AuditReport,
   JourneyStep,
+  JourneyActionType,
   PageObservation,
   ObservationResponse,
 } from './types/index.ts';
@@ -64,13 +65,16 @@ export default function App() {
     potentialIssuesCount: 0,
   });
 
-  // Phase 4 keeps empty audit report
-  const [auditReport] = useState<AuditReport>({
+  // Phase 4 Audit report with intent & extracted results support
+  const [auditReport, setAuditReport] = useState<AuditReport>({
     goal: null,
     status: null,
     totalSteps: null,
     accessibilityFindings: null,
     uxFrictionFindings: null,
+    intentType: null,
+    extractedResults: null,
+    summary: null,
   });
 
   const handleStopAgent = async () => {
@@ -90,8 +94,13 @@ export default function App() {
           timestamp: new Date().toLocaleTimeString(),
         },
       }));
+      setAuditReport((prev) => ({
+        ...prev,
+        status: 'Failed',
+        summary: 'Agent run was stopped by user.',
+      }));
+      setStatusMessage('Agent execution stopped by user.');
       setIsLaunching(false);
-      setStatusMessage('Agent stopped by user.');
     } catch (err: any) {
       console.error('[Stop Agent Error]', err);
     }
@@ -127,6 +136,17 @@ export default function App() {
     setIsLaunching(true);
     setJourneySteps([]);
 
+    setAuditReport({
+      goal: testingGoal.trim() || 'General page exploration',
+      status: 'In progress',
+      totalSteps: 0,
+      accessibilityFindings: 0,
+      uxFrictionFindings: 0,
+      intentType: null,
+      extractedResults: null,
+      summary: null,
+    });
+
     setAgentStatus({
       state: 'STARTING BROWSER',
       browserStatus: 'Launching...',
@@ -135,6 +155,8 @@ export default function App() {
       currentUrl: formattedUrl,
       pageTitle: null,
       isRunning: true,
+      intentType: undefined,
+      extractedResults: undefined,
       activity: {
         phase: 'NAVIGATE',
         headline: `Launching Chromium and navigating to ${formattedUrl}`,
@@ -232,27 +254,31 @@ export default function App() {
    * Dispatches real-time SSE stream events to the dashboard state
    */
   const handleAgentEvent = (event: any, defaultUrl: string) => {
+    if (!event || typeof event !== 'object') return;
     const timestamp = event.timestamp || new Date().toLocaleTimeString();
 
     switch (event.type) {
-      case 'START':
+      case 'START': {
+        const targetAddress = event.url || defaultUrl;
         setAgentStatus((prev) => ({
           ...prev,
           state: 'STARTING BROWSER',
           browserStatus: 'Launching...',
           agentStatus: 'Starting...',
-          currentUrl: event.url,
+          currentUrl: targetAddress,
           isRunning: true,
           activity: {
             phase: 'NAVIGATE',
-            headline: `Targeting: ${event.url}`,
+            headline: `Targeting: ${targetAddress}`,
             detail: event.goal ? `Goal: "${event.goal}"` : 'Autonomous general exploratory audit',
             timestamp,
           },
         }));
         break;
+      }
 
       case 'NAVIGATE': {
+        const targetAddress = event.url || defaultUrl;
         const browserMode = event.isHeadlessFallback
           ? 'Active (Chromium - Container)'
           : 'Active (Chromium - Visible Window)';
@@ -262,23 +288,23 @@ export default function App() {
           state: 'TARGET PAGE OPENED',
           browserStatus: browserMode,
           agentStatus: 'Ready',
-          currentStep: 1,
-          currentUrl: event.url,
-          pageTitle: event.title,
+          currentStep: event.stepNumber || 1,
+          currentUrl: targetAddress,
+          pageTitle: event.title || targetAddress,
           isHeadlessFallback: event.isHeadlessFallback,
           activity: {
             phase: 'NAVIGATE',
-            headline: `Target page loaded: "${event.title || event.url}"`,
+            headline: `Target page loaded: "${event.title || targetAddress}"`,
             timestamp,
           },
         }));
 
         setJourneySteps([
           {
-            stepNumber: 1,
+            stepNumber: event.stepNumber || 1,
             action: 'navigate',
-            description: `Navigated to target URL: ${event.url}`,
-            url: event.url,
+            description: event.description || `Navigated to target URL: ${targetAddress}`,
+            url: targetAddress,
             status: 'success',
             timestamp,
           },
@@ -287,152 +313,287 @@ export default function App() {
       }
 
       case 'OBSERVE': {
-        const obs: PageObservation = event.observation;
-        setPageObservation(obs);
+        const obs: PageObservation | undefined = event.observation;
+        if (obs) {
+          setPageObservation(obs);
+        }
+
+        const totalInteractive = obs?.stats?.totalInteractiveCount ?? obs?.interactiveElements?.length ?? 0;
+        const buttonCount = obs?.stats?.buttonCount ?? 0;
+        const linkCount = obs?.stats?.linkCount ?? 0;
+        const inputCount = obs?.stats?.inputCount ?? 0;
+
+        const headline = obs
+          ? `Observed ${totalInteractive} interactive controls (${buttonCount} buttons, ${linkCount} links, ${inputCount} inputs)`
+          : (event.description || 'Inspecting active page structure and interactive elements...');
+
+        const currentUrl = obs?.url || event.url;
 
         setAgentStatus((prev) => ({
           ...prev,
           state: 'OBSERVING PAGE',
           agentStatus: 'Observing...',
-          currentStep: event.stepNumber,
-          currentUrl: obs.url || prev.currentUrl,
-          pageTitle: obs.title || prev.pageTitle,
+          currentStep: event.stepNumber ?? prev.currentStep,
+          currentUrl: currentUrl || prev.currentUrl,
+          pageTitle: obs?.title || prev.pageTitle,
           activity: {
             phase: 'OBSERVE',
-            headline: `Observed ${obs.stats.totalInteractiveCount} interactive controls (${obs.stats.buttonCount} buttons, ${obs.stats.linkCount} links, ${obs.stats.inputCount} inputs)`,
+            headline,
             timestamp,
           },
         }));
 
-        setJourneySteps((prev) => {
-          const exists = prev.some((s) => s.stepNumber === event.stepNumber && s.action === 'observe');
-          if (exists) return prev;
-          return [
-            ...prev,
-            {
-              stepNumber: event.stepNumber,
-              action: 'observe',
-              description: `Observed page state: ${obs.stats.totalInteractiveCount} interactive elements detected, screenshot captured.`,
-              url: obs.url,
-              status: 'success',
-              timestamp,
-            },
-          ];
-        });
+        if (obs) {
+          setJourneySteps((prev) => {
+            const exists = prev.some((s) => s.stepNumber === event.stepNumber && s.action === 'observe');
+            if (exists) return prev;
+            return [
+              ...prev,
+              {
+                stepNumber: event.stepNumber,
+                action: 'observe',
+                description: event.description || `Observed page state: ${totalInteractive} interactive elements detected, screenshot captured.`,
+                url: obs.url || currentUrl || '',
+                status: 'success',
+                timestamp,
+              },
+            ];
+          });
+        }
         break;
       }
 
       case 'REASON': {
         const act = event.action;
-        const targetDesc = act.target ? ` "${act.target}"` : '';
-        const valueDesc = act.value ? ` with "${act.value}"` : '';
-        const headline = `Gemini decided: ${act.type.toUpperCase()}${targetDesc}${valueDesc}`;
+        const isPending = event.status === 'running' || !act;
 
-        setAgentStatus((prev) => ({
-          ...prev,
-          state: 'REASONING',
-          agentStatus: 'Reasoning...',
-          currentStep: event.stepNumber,
-          activity: {
-            phase: 'REASON',
-            headline,
-            explanation: act.explanation,
-            timestamp,
-          },
-        }));
+        if (isPending) {
+          setAgentStatus((prev) => ({
+            ...prev,
+            state: 'REASONING',
+            agentStatus: 'Reasoning...',
+            currentStep: event.stepNumber ?? prev.currentStep,
+            activity: {
+              phase: 'REASON',
+              headline: event.description || 'Gemini is evaluating page state and testing goal...',
+              timestamp,
+            },
+          }));
 
-        setJourneySteps((prev) => [
-          ...prev,
-          {
-            stepNumber: event.stepNumber,
-            action: 'reason',
-            actionType: act.type,
-            target: act.target,
-            value: act.value,
-            description: `Selected next action: ${act.type.toUpperCase()}${targetDesc}${valueDesc}`,
-            explanation: act.explanation,
-            status: 'running',
-            timestamp,
-          },
-        ]);
+          setJourneySteps((prev) => {
+            const exists = prev.some((s) => s.stepNumber === event.stepNumber && s.action === 'reason');
+            if (exists) return prev;
+            return [
+              ...prev,
+              {
+                stepNumber: event.stepNumber,
+                action: 'reason',
+                description: event.description || 'Gemini evaluating page observation...',
+                status: 'running',
+                timestamp,
+              },
+            ];
+          });
+        } else {
+          // Reasoned decision arrived
+          const rawType = act.action || act.type || event.actionType || 'ACTION';
+          const actionName = String(rawType).toLowerCase();
+          const targetDesc = act.target ? ` "${act.target}"` : '';
+          const valueDesc = act.value ? ` with "${act.value}"` : '';
+          const headline = `Gemini decided: ${actionName.toUpperCase()}${targetDesc}${valueDesc}`;
+          const currentIntent = event.intentType || act.intentType;
+          const currentResults = event.extractedResults || act.extractedResults;
+
+          setAgentStatus((prev) => ({
+            ...prev,
+            state: 'REASONING',
+            agentStatus: 'Reasoning Complete',
+            currentStep: event.stepNumber ?? prev.currentStep,
+            intentType: currentIntent || prev.intentType,
+            extractedResults: currentResults || prev.extractedResults,
+            activity: {
+              phase: 'REASON',
+              headline,
+              explanation: act.explanation || event.explanation,
+              timestamp,
+              intentType: currentIntent || prev.intentType,
+              extractedResults: currentResults || prev.extractedResults,
+            },
+          }));
+
+          setJourneySteps((prev) => {
+            const updated = [...prev];
+            const idx = updated.findIndex((s) => s.stepNumber === event.stepNumber && s.action === 'reason');
+            const stepEntry: JourneyStep = {
+              stepNumber: event.stepNumber,
+              action: 'reason',
+              actionType: actionName,
+              target: act.target,
+              value: act.value,
+              description: `Selected next action: ${actionName.toUpperCase()}${targetDesc}${valueDesc}`,
+              explanation: act.explanation || event.explanation,
+              status: 'running',
+              timestamp,
+              intentType: currentIntent,
+              extractedResults: currentResults,
+            };
+            if (idx >= 0) {
+              updated[idx] = stepEntry;
+            } else {
+              updated.push(stepEntry);
+            }
+            return updated;
+          });
+        }
         break;
       }
 
       case 'ACTION': {
         const act = event.action;
-        const res = event.result;
-        const stateName = res.success ? 'ACTION COMPLETED' : 'ACTION FAILED';
-        const headline = `${act.type.toUpperCase()} execution ${res.success ? 'succeeded' : 'failed'}: ${res.message}`;
+        const rawType = act?.action || act?.type || event.actionType || 'ACTION';
+        const actionName = String(rawType).toLowerCase();
+        const targetDesc = act?.target ? ` "${act.target}"` : '';
+        const valueDesc = act?.value ? ` with "${act.value}"` : '';
+        const isSuccess = event.status === 'success' || event.result?.success === true || (event.status !== 'failed' && event.result?.success !== false);
+        const detailMessage = event.description || event.result?.message || (isSuccess ? 'Action completed' : 'Action failed');
+        const stateName = isSuccess ? 'ACTION COMPLETED' : 'ACTION FAILED';
+        const headline = `${actionName.toUpperCase()} execution ${isSuccess ? 'succeeded' : 'failed'}: ${detailMessage}`;
+        const currentIntent = event.intentType || act?.intentType;
+        const currentResults = event.extractedResults || act?.extractedResults;
 
         setAgentStatus((prev) => ({
           ...prev,
           state: stateName,
-          agentStatus: 'Executing...',
-          currentStep: event.stepNumber,
+          agentStatus: isSuccess ? 'Action Completed' : 'Action Failed',
+          currentStep: event.stepNumber ?? prev.currentStep,
+          currentUrl: event.url || prev.currentUrl,
+          intentType: currentIntent || prev.intentType,
+          extractedResults: currentResults || prev.extractedResults,
           activity: {
             phase: 'ACT',
             headline,
-            explanation: act.explanation,
+            explanation: act?.explanation || event.explanation,
             timestamp,
+            intentType: currentIntent || prev.intentType,
+            extractedResults: currentResults || prev.extractedResults,
           },
         }));
 
-        // Update journey step status
+        const resolvedActionType: JourneyActionType = actionName === 'finish' ? 'finish' : 'action';
+
         setJourneySteps((prev) => {
           const updated = [...prev];
-          // Find the running step
+          let found = false;
           for (let i = updated.length - 1; i >= 0; i--) {
             if (updated[i].stepNumber === event.stepNumber && updated[i].action === 'reason') {
               updated[i] = {
                 ...updated[i],
-                action: act.type === 'finish' ? 'finish' : 'action',
-                description: `${act.type.toUpperCase()} executed: ${res.message}`,
-                status: res.success ? 'success' : 'failed',
+                action: resolvedActionType,
+                actionType: actionName,
+                target: act?.target || updated[i].target,
+                value: act?.value || updated[i].value,
+                description: `${actionName.toUpperCase()}${targetDesc}${valueDesc}: ${detailMessage}`,
+                status: isSuccess ? 'success' : 'failed',
                 timestamp,
+                url: event.url || updated[i].url,
+                intentType: currentIntent || updated[i].intentType,
+                extractedResults: currentResults || updated[i].extractedResults,
               };
+              found = true;
               break;
             }
+          }
+          if (!found) {
+            updated.push({
+              stepNumber: event.stepNumber,
+              action: resolvedActionType,
+              actionType: actionName,
+              target: act?.target,
+              value: act?.value,
+              description: `${actionName.toUpperCase()}${targetDesc}${valueDesc}: ${detailMessage}`,
+              status: isSuccess ? 'success' : 'failed',
+              timestamp,
+              url: event.url,
+              intentType: currentIntent,
+              extractedResults: currentResults,
+            });
           }
           return updated;
         });
         break;
       }
 
+      case 'FINISH':
       case 'COMPLETE': {
         const loopRes = event.result || event;
-        const isGoalMet = loopRes.reason === 'goal_met';
-        const finalState = isGoalMet ? 'GOAL COMPLETED' : loopRes.reason === 'stopped' ? 'STOPPED' : 'READY';
+        const rawStatus = String(loopRes.status || loopRes.reason || 'completed').toLowerCase();
+        const isGoalMet = rawStatus === 'completed' || rawStatus === 'goal_met';
+        const isStopped = rawStatus === 'stopped';
+        const finalState = isGoalMet ? 'GOAL COMPLETED' : isStopped ? 'STOPPED' : 'READY';
+
+        const finalIntent = loopRes.intentType || event.intentType || event.action?.intentType;
+        const finalResults = loopRes.extractedResults || event.extractedResults || event.action?.extractedResults;
+        const explanationText = event.explanation || event.action?.explanation || loopRes.message || event.description;
+
+        if (loopRes.finalObservation) {
+          setPageObservation(loopRes.finalObservation);
+        }
 
         setAgentStatus((prev) => ({
           ...prev,
           state: finalState,
-          agentStatus: isGoalMet ? 'Completed' : 'Ready',
+          agentStatus: isGoalMet ? 'Completed' : isStopped ? 'Stopped' : 'Ready',
           isRunning: false,
+          currentUrl: loopRes.finalObservation?.url || event.url || prev.currentUrl,
+          intentType: finalIntent || prev.intentType,
+          extractedResults: finalResults || prev.extractedResults,
           activity: {
             phase: 'COMPLETE',
-            headline: `Autonomous agent completed. Reason: ${loopRes.reason} (${loopRes.totalSteps || 0} steps executed)`,
+            headline: `Autonomous agent finished: ${loopRes.reason || loopRes.status || 'Complete'} (${loopRes.totalSteps || event.stepNumber || 0} steps)`,
+            detail: loopRes.message || event.description,
+            explanation: explanationText,
             timestamp,
+            intentType: finalIntent || prev.intentType,
+            extractedResults: finalResults || prev.extractedResults,
           },
         }));
 
-        setStatusMessage(`Agent loop finished: ${loopRes.reason} with ${loopRes.totalSteps || 0} steps executed.`);
+        setAuditReport((prev) => ({
+          goal: testingGoal.trim() || prev.goal || 'General page exploration',
+          status: isGoalMet ? 'Completed' : isStopped ? 'Failed' : 'Completed',
+          totalSteps: loopRes.totalSteps ?? event.stepNumber ?? prev.totalSteps ?? 0,
+          accessibilityFindings: 0,
+          uxFrictionFindings: 0,
+          generatedAt: new Date().toLocaleTimeString(),
+          intentType: finalIntent || prev.intentType,
+          extractedResults: finalResults || prev.extractedResults,
+          summary: explanationText || loopRes.message || event.description,
+        }));
+
+        setStatusMessage(loopRes.message || event.description || `Agent loop finished: ${rawStatus} with ${loopRes.totalSteps || 0} steps.`);
         break;
       }
 
       case 'ERROR': {
+        const errText = event.error || event.description || 'Unknown agent error occurred.';
         setAgentStatus((prev) => ({
           ...prev,
           state: 'AGENT FAILED',
           agentStatus: 'Error',
           isRunning: false,
-          errorMessage: event.error,
+          errorMessage: errText,
           activity: {
             phase: 'ERROR',
-            headline: `Error: ${event.error}`,
+            headline: `Error: ${errText}`,
             timestamp,
           },
         }));
-        setErrorMessage(event.error);
+        setAuditReport((prev) => ({
+          ...prev,
+          status: 'Failed',
+          summary: `Agent execution encountered an error: ${errText}`,
+        }));
+        setErrorMessage(errText);
         break;
       }
 
