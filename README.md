@@ -132,7 +132,7 @@ The server will boot on `http://localhost:3000` (serving both the Express API an
 │   │   └── AuditReportPanel.tsx          # Empty state (deferred to future phases)
 │   └── index.css                         # Tailwind styling
 ├── package.json
-└── README.md
+└── README.md.
 ```
 
 ---
